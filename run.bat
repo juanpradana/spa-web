@@ -1,5 +1,4 @@
 @echo off
-setlocal enabledelayedexpansion
 
 title Handfish — SA124B Spectrum Occupancy ^& Audio Recorder
 
@@ -36,18 +35,14 @@ if not exist "recordings" mkdir recordings
 if not exist "reports" mkdir reports
 if not exist "logs" mkdir logs
 
-:: Muat file konfigurasi .env jika ada
-if exist ".env" (
-    echo [*] Memuat variabel dari .env
-    for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
-        set "line=%%A"
-        if not "!line:~0,1!"=="#" (
-            if not "%%B"=="" set "%%A=%%B"
-        )
-    )
-)
+:: BEKAS: pembacaan .env lewat batch "for /f" dihapus di sini.
+:: Dengan setlocal enabledelayedexpansion aktif, CMD memperlakukan "!" sebagai
+:: penanda ekspansi tertunda dan memotongnya dari nilai variabel — sehingga
+:: ADMIN_PASSWORD=Admin123456! tiba di server sebagai Admin123456 dan login
+:: admin gagal. Pembacaan .env dilakukan sepenuhnya oleh Python
+:: (config.py:_load_dotenv), yang membaca berkas UTF-8 utuh apa adanya.
 
-:: Pengaturan host dan port default
+:: Pengaturan host dan port default (hanya untuk banner konsol)
 if "%SA_HOST%"=="" set SA_HOST=0.0.0.0
 if "%SA_PORT%"=="" set SA_PORT=8000
 

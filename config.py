@@ -17,20 +17,23 @@ BASE_DIR = Path(__file__).resolve().parent
 def _load_dotenv(path: Optional[Path] = None) -> None:
     """Muat `.env` ke `os.environ` tanpa menghapus karakter khusus.
 
-    `run.bat` tidak memakai ini dan tidak bisa diandalkan: parser `for /f`
-    dengan `setlocal enabledelayedexpansion` memotong setiap tanda seru (`!`)
-    di dalam nilai, sehingga `ADMIN_PASSWORD=Admin123456!` sampai ke server
-    sebagai `Admin123456` — login lalu gagal dengan "kredential tidak sah".
+    Secara historis `run.bat` memuat `.env` lewat batch `for /f` dengan
+    `setlocal enabledelayedexpansion`. CMD memperlakukan `!` sebagai penanda
+    ekspansi tertunda dan memotongnya, sehingga `ADMIN_PASSWORD=Admin123456!`
+    tiba di server sebagai `Admin123456` dan login admin gagal dengan
+    "kredensial tidak sah". Karena itu `run.bat` tidak lagi mem-parse `.env`;
+    pembacaan dilakukan sepenuhnya di sini, di mana tidak ada perlakuan khusus
+    tersebut dan nilai dibaca apa adanya.
 
-    Di Python tidak ada perlakuan khusus tersebut: nilai dibaca apa adanya.
-    Variabel yang sudah ada di environment TIDAK ditimpa, supaya pengaturan
-    dari docker-compose, CI, atau shell operator yang sah tetap menang.
+    Variabel yang sudah ada di environment tetap dibiarkan, supaya pengaturan
+    dari docker-compose, CI, skrip pengujian keamanan, atau shell operator yang
+    sah tetap menang.
     """
     env_file = (path if path is not None else BASE_DIR / ".env").resolve()
     if not env_file.is_file():
         return
     try:
-        text = env_file.read_text(encoding="utf-8")
+        text = env_file.read_text(encoding="utf-8-sig")
     except OSError:
         return
 
@@ -50,7 +53,7 @@ def _load_dotenv(path: Optional[Path] = None) -> None:
         # Buang quoting pasangan bila pengguna memakainya; jangan sentuh isinya.
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
-        # Jangan timpa variabel yang sudah diset di luar file ini.
+        # Jangan timpa variabel yang sudah diset di luar berkas ini.
         if os.environ.get(key) in (None, ""):
             os.environ[key] = value
 
