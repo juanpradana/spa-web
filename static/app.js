@@ -56,6 +56,15 @@ const state = {
   audioGainNode: null,
   audioNextPlayTime: 0,
   isListening: false,
+  listenFreqHz: 0,          // frekuensi audio aktif (selaras dengan engine)
+  listenDemod: "FM",
+
+  // Geser frekuensi audio langsung pada kanvas (drag garis pembawa)
+  listenDragActive: false,
+  listenDragStartX: 0,
+  listenDragFreqHz: 0,
+  listenDragTimer: null,
+  listenDragMoved: false,    // membedakan klik (retune sekali) dari tarikan
 
   // Rekam audio manual
   isManualRecording: false,
@@ -518,6 +527,7 @@ function parseSpectrumBinary(buffer) {
     timestamp,
     startHz,
     binSizeHz,
+    stopHz: startHz + length * binSizeHz,   // geometri kanvas pan/zoom bergantung pada ini
     noiseFloor,
     threshold,
     levels,
@@ -643,24 +653,14 @@ function initSpectrumCanvas() {
     return { idx, freqHz: f.startHz + idx * f.binSizeHz, x };
   };
 
-  specCanvas.addEventListener("mousemove", (e) => {
-    const rect = specCanvas.getBoundingClientRect();
-    markerX = e.clientX - rect.left;
-    updateMarkerReadout(markerX, rect.width, readout);
-
-    // Geser marker manual dengan drag
-    if (state.markerDragActive && state.markerMode === "manual") {
-      const hit = _freqAtX(e.clientX);
-      if (hit) {
-        state.markerManual = { freqHz: hit.freqHz, dbm: null, index: hit.idx };
-        updateMarkerListenButton();
-        drawSpectrum();
-      }
-    }
-  });
-
   specCanvas.addEventListener("mouseleave", () => {
     markerX = null;
+    // Tombol terlepas di luar kanvas: tuntaskan geser frekuensi audio
+    // supaya tidak menggantung setengah jalan.
+    if (state.listenDragActive) {
+      _setListenFreq(state.listenDragFreqHz, false);
+      _endListenDrag();
+    }
     state.markerDragActive = false;
     readout.hidden = true;
     drawSpectrum();
@@ -688,6 +688,86 @@ function initSpectrumCanvas() {
     const idx = Math.round(ratio * (f.length - 1));
     return { idx, freqHz: f.startHz + idx * f.binSizeHz, x };
   }
+
+  // -- geser frekuensi audio saat mendengarkan --------------------------- //
+  // Lebar bandwidth passband per mode demod, untuk overlay & visualisasi.
+  function _demodBandwidthHz(demod) {
+    switch (String(demod || "").toUpperCase()) {
+      case "FM": return 150_000;   // passband siaran FM ~150 kHz
+      case "AM": return 8_000;
+      case "USB":
+      case "LSB": return 3_000;
+      case "CW": return 1_000;
+      default: return 15_000;
+    }
+  }
+
+  /** Posisi X (relatif kanvas) dari frekuensi audio — `null` bila di luar sapuan. */
+  function _listenLineX() {
+    const f = state.spectrumFrame;
+    const freq = state.listenDragActive ? state.listenDragFreqHz : state.listenFreqHz;
+    if (!f || !Number.isFinite(freq) || freq <= 0) return null;
+    const stopHz = f.startHz + f.length * f.binSizeHz;
+    if (stopHz <= f.startHz) return null;
+    const rect = specCanvas.getBoundingClientRect();
+    return ((freq - f.startHz) / (stopHz - f.startHz)) * rect.width;
+  }
+
+  /** Kocok frekuensi audio sebesar `deltaPx` piksel kanvas (untuk pan/roda). */
+  function _nudgeListenFreq(deltaPx) {
+    const f = state.spectrumFrame;
+    if (!f || !state.isListening) return;
+    const rect = specCanvas.getBoundingClientRect();
+    const spanHz = f.length * f.binSizeHz;
+    const deltaHz = (deltaPx / rect.width) * spanHz;
+    _setListenFreq(state.listenFreqHz + deltaHz, /*throttle*/ true);
+  }
+
+  /**
+   * Set frekuensi audio baru dari kanvas. Selama tarikan, tampilan diperbarui
+   * seketika (pra-lapar) sementara panggilan API dithrottle supaya backend
+   * tidak dibanjiri `configure_audio` pada setiap piksel.
+   */
+  function _setListenFreq(freqHz, throttle) {
+    const minF = 100_000;
+    const maxF = 12_400_000_000;
+    const clamped = Math.max(minF, Math.min(maxF, Math.round(freqHz)));
+    if (!Number.isFinite(clamped) || clamped <= 0) return;
+    state.listenDragFreqHz = clamped;
+    _syncListenInputs(clamped);
+    drawSpectrum();
+
+    if (state.listenDragTimer) clearTimeout(state.listenDragTimer);
+    const fire = () => {
+      state.listenDragTimer = null;
+      if (!state.isListening) return;
+      startListening(clamped, getMonitorDemod());
+    };
+    if (throttle) {
+      state.listenDragTimer = setTimeout(fire, 90);
+    } else {
+      fire();
+    }
+  }
+
+  /** Tulis frekuensi ke kedua kotak input (drawer samping & bilah monitor). */
+  function _syncListenInputs(freqHz) {
+    const mhz = (freqHz / 1e6).toFixed(4);
+    const mon = document.getElementById("monListenFreq");
+    if (mon) mon.value = mhz;
+    const side = document.getElementById("listenFreq");
+    if (side) side.value = mhz;
+  }
+
+  function _endListenDrag() {
+    if (state.listenDragTimer) {
+      clearTimeout(state.listenDragTimer);
+      state.listenDragTimer = null;
+    }
+    state.listenDragActive = false;
+    specCanvas.style.cursor = "";
+  }
+
 
   function _drawCropOverlay() {
     const overlay = document.getElementById("cropOverlay");
@@ -743,13 +823,21 @@ function initSpectrumCanvas() {
   function _applyPan(deltaX) {
     if (!state.spectrumFrame) return;
     const f = state.spectrumFrame;
+    if (state.isListening) {
+      // Perangkat sedang mendemodulasi audio: geser frekuensi siaran,
+      // bukan center sapuan (sapuan memang sedang dijeda — tak ada gunanya).
+      _nudgeListenFreq(deltaX);
+      return;
+    }
     const rect = specCanvas.getBoundingClientRect();
+    const stopHz = f.startHz + f.length * f.binSizeHz;
+    const curCenter = (f.startHz + stopHz) / 2;
     const freqDelta = - (deltaX / rect.width) * (f.length * f.binSizeHz);
-    const newCenter = (f.startHz + f.stopHz) / 2 + freqDelta;
+    const newCenter = curCenter + freqDelta;
     const minFreq = 100000;
     const maxFreq = 12400000000;
     const clamped = Math.max(minFreq + f.binSizeHz * f.length / 2, Math.min(maxFreq - f.binSizeHz * f.length / 2, newCenter));
-    if (Math.abs(clamped - ((f.startHz + f.stopHz) / 2)) < 1) return;
+    if (Math.abs(clamped - curCenter) < 1) return;
     api("/api/rf/sweep", { method: "POST", body: { center_hz: clamped } })
       .catch(err => toast(err.message, "err"));
   }
@@ -757,6 +845,13 @@ function initSpectrumCanvas() {
   specCanvas.addEventListener("click", (e) => {
     const hit = _freqAtCanvasX(e.clientX);
     if (!hit) return;
+
+    // Click sesudah tarikan garis pembawa hanya menuntaskan posisi —
+    // frekuensinya sudah dikirim saat `mouseup`, jangan dobel-panggil.
+    if (state.listenDragMoved) {
+      state.listenDragMoved = false;
+      return;
+    }
 
     // Alt+click atau double-click (detail: 2) -> mulai dengar di frekuensi ini
     if (e.altKey || e.detail === 2) {
@@ -784,13 +879,33 @@ function initSpectrumCanvas() {
   });
 
   specCanvas.addEventListener("mousedown", (e) => {
-    // Tombol kiri drag -> crop box zoom (atau marker drag jika dekat marker)
+    // Tombol kiri drag -> crop box zoom (atau marker drag / geser frekuensi audio)
     if (e.button === 0) {
+      // Saat mendengarkan, tekan di mana pun mulai tarikan untuk menyesuaikan
+      // frekuensi siaran secara kontinu — ini cara ngepasin sinyal cepat.
+      if (state.isListening) {
+        const lineX = _listenLineX();
+        const rect = specCanvas.getBoundingClientRect();
+        const nearLine = lineX === null || Math.abs(e.clientX - rect.left - lineX) < 24;
+        if (nearLine) {
+          const hit = _freqAtCanvasX(e.clientX);
+          if (hit) {
+            state.listenDragActive = true;
+            state.listenDragMoved = false;
+            state.listenDragStartX = e.clientX;
+            state.listenDragFreqHz = hit.freqHz;
+            specCanvas.style.cursor = "ew-resize";
+            drawSpectrum();
+            return;
+          }
+        }
+      }
       // Jika marker manual aktif dan klik dekat marker: mulai drag marker
       if (state.markerMode === "manual" && state.markerManual && state.spectrumFrame) {
         const f = state.spectrumFrame;
         const rect = specCanvas.getBoundingClientRect();
-        const mx = ((state.markerManual.freqHz - f.startHz) / (f.length * f.binSizeHz)) * rect.width;
+        const stopHz = f.startHz + f.length * f.binSizeHz;
+        const mx = ((state.markerManual.freqHz - f.startHz) / (stopHz - f.startHz)) * rect.width;
         if (Math.abs(e.clientX - rect.left - mx) < 16) {
           state.markerDragActive = true;
           return;
@@ -803,7 +918,7 @@ function initSpectrumCanvas() {
       _drawCropOverlay();
       return;
     }
-    // Tombol kanan / tengah drag -> pan frekuensi
+    // Tombol kanan / tengah drag -> pan frekuensi (audio bila sedang dengar)
     if (e.button === 2 || e.button === 1) {
       e.preventDefault();
       state.panActive = true;
@@ -816,6 +931,15 @@ function initSpectrumCanvas() {
   specCanvas.addEventListener("mousemove", (e) => {
     const rect = specCanvas.getBoundingClientRect();
     markerX = e.clientX - rect.left;
+
+    // Tarikan geser frekuensi audio: tampilan live, API dithrottle
+    if (state.listenDragActive) {
+      if (Math.abs(e.clientX - state.listenDragStartX) > 2) state.listenDragMoved = true;
+      const hit = _freqAtCanvasX(e.clientX);
+      if (hit) _setListenFreq(hit.freqHz, true);
+      return;
+    }
+
     updateMarkerReadout(markerX, rect.width, document.getElementById("markerReadout"));
 
     // Drag marker manual
@@ -854,6 +978,12 @@ function initSpectrumCanvas() {
       _applyCrop();
       _drawCropOverlay(); // sembunyikan
     }
+    // Tarikan geser frekuensi audio tuntas: kirim posisi akhir tepat (tak dithrottle)
+    if (state.listenDragActive) {
+      _setListenFreq(state.listenDragFreqHz, false);
+      _endListenDrag();
+      drawSpectrum();
+    }
     state.markerDragActive = false;
 
     // Pan selesai
@@ -872,11 +1002,21 @@ function initSpectrumCanvas() {
   specCanvas.addEventListener("wheel", (e) => {
     if (!state.spectrumFrame) return;
     e.preventDefault();
+
+    // Saat mendengarkan, zoom span tak ada gunanya (sapuan dijeda) — arahkan
+    // roda ke penggeseran frekuensi audio supaya operator tetap bisa tuning.
+    if (state.isListening) {
+      const step = e.deltaY > 0 ? 40 : -40; // naik = turunkan freq
+      _nudgeListenFreq(-step);
+      return;
+    }
+
     const dir = e.deltaY > 0 ? 1 : -1;
     const factor = dir > 0 ? 1.25 : 0.8;
     const f = state.spectrumFrame;
-    const newSpan = Math.max(100000, Math.min(12400000000, (f.stopHz - f.startHz) * factor));
-    const newCenter = (f.startHz + f.stopHz) / 2;
+    const stopHz = f.startHz + f.length * f.binSizeHz;
+    const newSpan = Math.max(100000, Math.min(12400000000, (stopHz - f.startHz) * factor));
+    const newCenter = (f.startHz + stopHz) / 2;
 
     if (state.wheelZoomTimeout) clearTimeout(state.wheelZoomTimeout);
     state.wheelZoomTimeout = setTimeout(() => {
@@ -890,9 +1030,25 @@ function initSpectrumCanvas() {
     if (!e.touches.length) return;
     const touch = e.touches[0];
     const rect = specCanvas.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
     const f = state.spectrumFrame;
     if (!f) return;
+
+    // Sedang mendengarkan: jari mulai menarikan frekuensi audio
+    if (state.isListening) {
+      const hit = _freqAtCanvasX(touch.clientX);
+      if (hit) {
+        state.listenDragActive = true;
+        state.listenDragMoved = false;
+        state.listenDragStartX = touch.clientX;
+        state.listenDragFreqHz = hit.freqHz;
+        specCanvas.style.cursor = "ew-resize";
+        drawSpectrum();
+        e.preventDefault();
+        return;
+      }
+    }
+
+    const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
     const idx = Math.round(ratio * (f.length - 1));
     state.markerMode = "manual";
     state.markerManual = { freqHz: f.startHz + idx * f.binSizeHz, dbm: null, index: idx };
@@ -901,6 +1057,22 @@ function initSpectrumCanvas() {
     drawSpectrum();
     e.preventDefault();
   }, { passive: false });
+
+  specCanvas.addEventListener("touchmove", (e) => {
+    if (!state.listenDragActive || !e.touches.length) return;
+    const touch = e.touches[0];
+    if (Math.abs(touch.clientX - state.listenDragStartX) > 2) state.listenDragMoved = true;
+    const hit = _freqAtCanvasX(touch.clientX);
+    if (hit) _setListenFreq(hit.freqHz, true);
+    e.preventDefault();
+  }, { passive: false });
+
+  specCanvas.addEventListener("touchend", () => {
+    if (!state.listenDragActive) return;
+    _setListenFreq(state.listenDragFreqHz, false);
+    _endListenDrag();
+    drawSpectrum();
+  });
 }
 
 function updateMarkerReadout(x, width, el) {
@@ -968,8 +1140,10 @@ function drawSpectrum() {
   }
 
   const f = state.spectrumFrame;
-  if (!f || performance.now() - state.lastFrameAt > 3500) {
-    drawSpectrumStatus(w, h, "Menunggu sapuan…");
+  const isListeningMode = state.isListening || state.rfState === "MANUAL_AUDIO";
+  if (!f || (!isListeningMode && performance.now() - state.lastFrameAt > 3500)) {
+    drawSpectrumStatus(w, h, isListeningMode ? "Demodulasi Audio Manual" : "Menunggu sapuan…");
+    if (isListeningMode) requestAnimationFrame(drawSpectrum); // jaga jedaan pulsa
     return;
   }
 
@@ -1094,7 +1268,10 @@ function drawSpectrum() {
     drawSpectrumStatus(w, h, "Merekam Audio Dwell");
     requestAnimationFrame(drawSpectrum);
   } else if (state.rfState === "MANUAL_AUDIO") {
-    drawSpectrumStatus(w, h, "Demodulasi Audio Manual");
+    // Jangan lagi menutupi seluruh kanvas dengan kotak besar — taruh badge ringkas
+    // di kanan atas dan gambar garis pembawa (carrier line) untuk tuning visual.
+    drawListenBadge(specCtx, w, h);
+    drawCarrierLine(specCtx, w, h);
     requestAnimationFrame(drawSpectrum);
   }
 }
@@ -1277,6 +1454,133 @@ function updateMarkerListenButton() {
     btn.textContent = "🎯 Frek. Marker";
     delete btn.dataset.freqHz;
   }
+}
+
+// --------------------------------------------------------------------------- //
+// Badge Status & Garis Pembawa Tuning Audio Manual
+// --------------------------------------------------------------------------- //
+function drawListenBadge(ctx, w, h) {
+  const f = state.spectrumFrame;
+  const freq = state.listenDragActive ? state.listenDragFreqHz : state.listenFreqHz;
+  const demod = getMonitorDemod();
+  const freqMhz = (freq / 1e6).toFixed(4);
+
+  ctx.save();
+  const now = performance.now();
+  const pulse = (Math.sin(now / 200) + 1) / 2;
+  const text = `🎧 ${freqMhz} MHz (${demod}) · Geser garis untuk tuning`;
+
+  ctx.font = "bold 11px monospace";
+  const tw = ctx.measureText(text).width;
+  const badgeW = tw + 28;
+  const badgeH = 24;
+  const badgeX = Math.max(8, w - badgeW - 10);
+  const badgeY = 8;
+
+  // Latar semi-transparan elegan
+  ctx.fillStyle = "rgba(10, 14, 20, 0.85)";
+  ctx.strokeStyle = `rgba(59, 130, 246, ${0.45 + 0.55 * pulse})`;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 6);
+  ctx.fill();
+  ctx.stroke();
+
+  // Titik denyut status "Mendengarkan"
+  ctx.fillStyle = `rgba(59, 130, 246, ${0.6 + 0.4 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(badgeX + 11, badgeY + badgeH / 2, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Teks info
+  ctx.fillStyle = "#e5e7eb";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, badgeX + 20, badgeY + badgeH / 2);
+  ctx.restore();
+}
+
+function drawCarrierLine(ctx, w, h) {
+  const f = state.spectrumFrame;
+  if (!f) return;
+  const freq = state.listenDragActive ? state.listenDragFreqHz : state.listenFreqHz;
+  if (!Number.isFinite(freq) || freq <= 0) return;
+  const stopHz = f.startHz + f.length * f.binSizeHz;
+  if (stopHz <= f.startHz) return;
+
+  const ratio = (freq - f.startHz) / (stopHz - f.startHz);
+  const x = ratio * w;
+  // Di luar tampilan: abaikan
+  if (x < -20 || x > w + 20) return;
+
+  const demod = getMonitorDemod();
+  const bwHz = (typeof _demodBandwidthHz === "function") ? _demodBandwidthHz(demod) : 15_000;
+  const bwPx = Math.max(3, (bwHz / (stopHz - f.startHz)) * w);
+
+  ctx.save();
+
+  // 1. Pita Passband Demodulasi (bayangan cyan transparan)
+  ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
+  ctx.fillRect(x - bwPx / 2, 0, bwPx, h);
+
+  // 2. Garis Batas Passband Kiri-Kanan (garis putus-putus halus)
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x - bwPx / 2, 0);
+  ctx.lineTo(x - bwPx / 2, h);
+  ctx.moveTo(x + bwPx / 2, 0);
+  ctx.lineTo(x + bwPx / 2, h);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 3. Garis Pembawa Utama (Carrier Line)
+  const isDragging = state.listenDragActive;
+  ctx.strokeStyle = isDragging ? "#38bdf8" : "rgba(56, 189, 248, 0.9)";
+  ctx.lineWidth = isDragging ? 2.2 : 1.6;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, h);
+  ctx.stroke();
+
+  // 4. Handle Penarik (Lingkaran di bagian atas garis)
+  const handleY = 32;
+  ctx.fillStyle = isDragging ? "#0284c7" : "#0f172a";
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, handleY, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Titik tengah putih kecil di dalam handle
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(x, handleY, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 5. Label Frekuensi di Bawah Handle
+  const mhzStr = `${(freq / 1e6).toFixed(4)} MHz`;
+  ctx.font = "bold 10px monospace";
+  const tw = ctx.measureText(mhzStr).width;
+  const lx = Math.max(tw / 2 + 4, Math.min(w - tw / 2 - 4, x));
+  const ly = handleY + 18;
+
+  ctx.fillStyle = "rgba(10, 14, 20, 0.82)";
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.5)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(lx - tw / 2 - 4, ly - 9, tw + 8, 14, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#38bdf8";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(mhzStr, lx, ly - 2);
+
+  ctx.restore();
 }
 
 function drawSpectrumStatus(w, h, title) {
@@ -1468,30 +1772,44 @@ function syncAudioButtons() {
 
 async function startListening(freqHz, demod) {
   initAudio();
+  const dem = demod || "FM";
   try {
     await api("/api/rf/listen", {
       method: "POST",
-      body: { freq_hz: freqHz, demod: demod || "FM" },
+      body: { freq_hz: freqHz, demod: dem },
     });
     state.isListening = true;
+    state.listenFreqHz = Number(freqHz) || 0;
+    state.listenDemod = dem;
 
     // Sinkronkan kedua antarmuka
-    const monFreq = document.getElementById("monListenFreq");
-    if (monFreq) monFreq.value = (freqHz / 1e6).toFixed(4);
-    const sideFreq = document.getElementById("listenFreq");
-    if (sideFreq) sideFreq.value = (freqHz / 1e6).toFixed(4);
+    _syncListenInputs(state.listenFreqHz);
     const sideDemod = document.getElementById("listenDemod");
-    if (sideDemod && demod) sideDemod.value = demod;
+    if (sideDemod) sideDemod.value = dem;
 
     syncAudioButtons();
-    toast(`Mendengarkan ${(freqHz / 1e6).toFixed(4)} MHz (${demod})`, "ok");
+    // Saat operator menaris garis pembawa, jangan munculkan toast setiap 90 ms.
+    if (!state.listenDragActive) {
+      toast(`Mendengarkan ${(state.listenFreqHz / 1e6).toFixed(4)} MHz (${dem})`, "ok");
+    }
+    drawSpectrum();
   } catch (err) {
     toast(err.message, "err");
+    drawSpectrum();
   }
 }
 
 async function stopListening() {
   state.isListening = false;
+  // Batalkan geseran frekuensi yang mungkin masih menggantung
+  if (state.listenDragTimer) {
+    clearTimeout(state.listenDragTimer);
+    state.listenDragTimer = null;
+  }
+  state.listenDragActive = false;
+  state.listenDragMoved = false;
+  specCanvas.style.cursor = "";
+
   // Mute audio gain seketika dan tangguhkan AudioContext agar buffer terjadwal tidak terus berbunyi!
   if (state.audioGainNode && state.audioCtx) {
     try {
@@ -2477,8 +2795,14 @@ async function refreshStatus() {
 
     // Sinkronisasi dengar manual (state MANUAL_AUDIO)
     if (s.manual_audio !== undefined) {
+      const wasListening = state.isListening;
       state.isListening = !!s.manual_audio;
+      // Frekuensi & demod otoritatif datang dari engine, supaya tab lain
+      // atau perubahan di luar kanvas ikut tercerminkan di garis pembawa.
+      if (s.manual_freq_hz) state.listenFreqHz = Number(s.manual_freq_hz);
+      if (s.manual_demod) state.listenDemod = String(s.manual_demod);
       syncAudioButtons();
+      if (wasListening !== state.isListening) drawSpectrum();
     }
 
     // Pelajari threshold terkini dari status perangkat

@@ -442,6 +442,11 @@ label.range-mini input { width: 72px; }
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+
+/* Kanvas spektrum: matikan ayunan browser saat operator mengeser frekuensi. */
+.canvas-wrap canvas {
+  touch-action: none;
+}
 .crop-overlay {
   position: absolute;
   inset: 0;

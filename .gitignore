@@ -65,3 +65,7 @@ desktop.ini
 .vscode/
 *.sublime-project
 *.sublime-workspace
+
+# Browser & MCP Test Artifacts
+.playwright-mcp/
+

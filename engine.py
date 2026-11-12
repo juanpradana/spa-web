@@ -308,15 +308,21 @@ class CaptureEngine:
 
         Perangkat tidak bisa menyapu sekaligus mendemodulasi audio, jadi mesin
         beralih ke STATE_MANUAL_AUDIO dan sapuan dijeda sampai diteghentikan.
+        Bila sesi audio manual sudah berjalan, ini berfungsi sebagai retune cepat
+        tanpa menghentikan streaming audio secara kasar.
         """
         freq = float(freq_hz)
         demod_u = str(demod).upper()
         with self._lock:
+            already_in_audio = (self._state == STATE_MANUAL_AUDIO)
             self._manual_audio_freq = freq
             self._manual_audio_demod = demod_u
             self._state = STATE_MANUAL_AUDIO
             self._config_dirty = True
-            if self._device is not None:
+            # Hanya panggil stop_stream jika sedang dalam mode SWEEPING untuk
+            # menghentikan sapuan. Bila sudah dalam mode audio manual, biarkan
+            # loop audio menerapkan frekuensi baru dengan mulus tanpa abort.
+            if not already_in_audio and self._device is not None:
                 try:
                     self._device.stop_stream()
                 except Exception:
@@ -765,6 +771,26 @@ class CaptureEngine:
                 })
 
     # -- manual audio listening -------------------------------------------- #
+    def retune_manual_audio(self, freq_hz: float, demod: Optional[str] = None) -> dict:
+        """Pindahkan frekuensi siaran tanpa melepas sesi dengar.
+
+        Berbeda dari `start_manual_audio` (yang juga memanggil `stop_stream()`
+        dan memicu jeda antrean audio), metode ini hanya memperbarui frekuensi
+        target; siklus `_step_manual_audio` berikutnya yang menerapkannya lewat
+        `configure_audio` ketika mode perangkat sudah bukan SA_AUDIO lagi — atau
+        langsung, bila perangkat masih dalam mode audio dan mendukung reconfigure
+        tanau while-running. Ini yang dipakai drag-tuning di kanvas.
+        """
+        freq = float(freq_hz)
+        with self._lock:
+            self._manual_audio_freq = freq
+            if demod:
+                self._manual_audio_demod = str(demod).upper()
+            if self._state != STATE_MANUAL_AUDIO:
+                self._state = STATE_MANUAL_AUDIO
+                self._config_dirty = True
+        return {"status": "ok", "freq_hz": freq, "demod": self._manual_audio_demod}
+
     def _step_manual_audio(self) -> None:
         dev = self._device
         freq = self._manual_audio_freq
@@ -773,7 +799,13 @@ class CaptureEngine:
             return
 
         audio_cfg = CONFIG.get("audio")
-        if not hasattr(dev, "_mode") or getattr(dev, "_mode") != 3:  # SA_AUDIO = 3
+        in_audio_mode = hasattr(dev, "_mode") and getattr(dev, "_mode") == 3  # SA_AUDIO = 3
+        needs_config = (not in_audio_mode) or (
+            getattr(dev, "_audio_center_hz", None) is not None
+            and abs(getattr(dev, "_audio_center_hz") - freq) > 0.5
+        )
+
+        if needs_config:
             try:
                 dev.configure_audio(
                     center_hz=freq,

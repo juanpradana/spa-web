@@ -306,6 +306,7 @@ class SA124:
         self._info = DeviceInfo(connected=False, simulated=False)
         self._sweep_buf = None
         self._audio_buf = None
+        self._audio_center_hz: Optional[float] = None
         self._audio_rate = AUDIO_SAMPLES_PER_SEC
 
     # -- siklus hidup ------------------------------------------------------ #
@@ -512,6 +513,7 @@ class SA124:
             mode = AUDIO_MODES.get(str(demod).upper())
             if mode is None:
                 raise SAError(f"mode demodulasi tidak dikenal: {demod}")
+            self._audio_center_hz = float(center_hz)
             if_bw = _clamp(if_bw_hz, 500.0, 500_000.0)
             lpf = _clamp(lpf_hz, 1_000.0, 12_000.0)
             hpf = _clamp(hpf_hz, 20.0, 1_000.0)
@@ -620,6 +622,7 @@ class SimulatedSA124:
         self._audio_rate = AUDIO_SAMPLES_PER_SEC
         self._t0 = time.time()
         self._audio_phase = 0.0
+        self._audio_center_hz: Optional[float] = None
         self._info = DeviceInfo(
             connected=True,
             simulated=True,
@@ -701,6 +704,7 @@ class SimulatedSA124:
             self._center = center_hz
             self._demod = str(demod).upper()
             self._mode = None
+            self._audio_center_hz = float(center_hz)
 
     def initiate_audio(self) -> None:
         self._mode = SA_AUDIO
