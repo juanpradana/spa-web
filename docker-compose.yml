@@ -1,0 +1,102 @@
+# ======================================================================
+#   HANDFISH — Signal Hound SA124B Dashboard
+#   Deployment multi-platform dengan Docker Compose
+#
+#   Mode dasar:      docker compose up -d
+#   Dengan HTTPS:    docker compose --profile proxy up -d
+# ======================================================================
+
+services:
+  handfish:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: handfish:latest
+    container_name: handfish-app
+    restart: unless-stopped
+
+    ports:
+      - "${SA_PORT:-8000}:8000"
+
+    environment:
+      SA_HOST: "0.0.0.0"
+      SA_PORT: "8000"
+      SA_SIMULATE: "${SA_SIMULATE:-false}"
+      SA_DEVICE_SERIAL: "${SA_DEVICE_SERIAL:-}"
+      SA_ENABLE_DOCS: "${SA_ENABLE_DOCS:-false}"
+      SA_LOG_LEVEL: "${SA_LOG_LEVEL:-INFO}"
+
+      # Keamanan — isi SECRET_KEY di produksi agar sesi tidak gugur saat restart
+      SECRET_KEY: "${SECRET_KEY:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      SA_TOKEN_TTL_MINUTES: "${SA_TOKEN_TTL_MINUTES:-720}"
+      SA_LOGIN_RATE_LIMIT: "${SA_LOGIN_RATE_LIMIT:-5}"
+      SA_LOGIN_RATE_WINDOW_SEC: "${SA_LOGIN_RATE_WINDOW_SEC:-60}"
+
+      # Ambang batas okupansi & perekaman
+      SA_THRESHOLD_MODE: "${SA_THRESHOLD_MODE:-adaptive}"
+      SA_ADAPTIVE_OFFSET_DB: "${SA_ADAPTIVE_OFFSET_DB:-10.0}"
+      SA_FIXED_THRESHOLD_DBM: "${SA_FIXED_THRESHOLD_DBM:--85.0}"
+      SA_DWELL_SEC: "${SA_DWELL_SEC:-12.0}"
+      SA_MAX_RECORDING_SEC: "${SA_MAX_RECORDING_SEC:-30.0}"
+      SA_HANG_TIME_SEC: "${SA_HANG_TIME_SEC:-2.0}"
+
+    volumes:
+      # Data persisten: kredensial, statistik okupansi, jadwal, konfigurasi
+      - ./data:/app/data
+      - ./recordings:/app/recordings
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+
+    # ------------------------------------------------------------------
+    # Passthrough perangkat keras USB Signal Hound SA124B
+    #
+    # Berfungsi pada host Linux (termasuk Raspberry Pi / NUC lapangan).
+    # Pada Docker Desktop (Windows/macOS) blok `devices` diabaikan — jalankan
+    # aplikasi secara native lewat run.bat, atau ekspos USB via usbipd-win.
+    # ------------------------------------------------------------------
+    devices:
+      - "/dev/bus/usb:/dev/bus/usb"
+
+    # Beri hak akses node USB tanpa menjalankan container sebagai root.
+    # Sesuaikan GID dengan host:  ls -l /dev/bus/usb/001/  →  stat -c '%g' /dev/bus/usb/001/001
+    # group_add:
+    #   - "${USB_GID:-20}"     # dialout pada Debian/Ubuntu
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    security_opt:
+      - no-new-privileges:true
+
+  # --------------------------------------------------------------------
+  # Reverse Proxy Caddy (opsional, profil `proxy`)
+  # HTTPS otomatis via Let's Encrypt, kompresi zstd/gzip, WebSocket
+  # transparan. Diperlukan saat dashboard diekspos ke internet.
+  # --------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: handfish-caddy
+    restart: unless-stopped
+    profiles: ["proxy"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      handfish:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0e14">
+<title>Handfish — Pemantau Spektrum SA124B</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ===================== LAYAR LOGIN ===================== -->
+<div id="loginScreen" class="login-screen">
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <div class="login-brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2-6 3 12 2.5-8 2 5h5.5"/></svg>
+      <div>
+        <h1>HANDFISH</h1>
+        <p>Pemantau Okupansi Spektrum &amp; Perekam Audio</p>
+      </div>
+    </div>
+
+    <label class="field">
+      <span>Nama pengguna</span>
+      <input id="loginUser" name="username" type="text" required autocomplete="username"
+             autocapitalize="none" spellcheck="false" placeholder="admin">
+    </label>
+
+    <label class="field">
+      <span>Kata sandi</span>
+      <input id="loginPass" name="password" type="password" required autocomplete="current-password"
+             placeholder="••••••••">
+    </label>
+
+    <div id="loginError" class="login-error" role="alert" hidden></div>
+
+    <button id="loginBtn" class="btn btn-primary btn-block" type="submit">
+      <span class="btn-label">Masuk</span>
+    </button>
+
+    <p class="login-hint">
+      Sesi diamankan dengan JWT HS256. Percobaan login dibatasi 5×/menit per alamat IP.
+    </p>
+  </form>
+</div>
+
+<!-- ===================== APLIKASI ===================== -->
+<div id="app" class="app" hidden>
+
+  <header class="topbar">
+    <button id="navToggle" class="icon-btn nav-toggle" aria-label="Buka menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2-6 3 12 2.5-8 2 5h5.5"/></svg>
+      <span>HANDFISH</span>
+    </div>
+
+    <div class="topbar-status">
+      <button id="deviceChip" class="chip chip-idle chip-btn" type="button" title="Klik untuk pilih / sambung ulang perangkat" aria-label="Status perangkat — klik untuk pilih">
+        <span class="dot"></span><span id="deviceText">Menghubungkan…</span>
+      </button>
+      <span id="stateChip" class="chip chip-idle" title="Status mesin">
+        <span class="dot"></span><span id="stateText">IDLE</span>
+      </span>
+      <span id="metaChip" class="chip chip-muted" title="Tingkat pembaruan &amp; suhu">
+        <span id="metaText">— fps · — °C</span>
+      </span>
+    </div>
+
+    <div class="topbar-user">
+      <span id="userBadge" class="user-badge">
+        <span id="userName">—</span>
+        <span id="userRole" class="role-tag">viewer</span>
+      </span>
+      <button id="themeToggle" class="icon-btn" aria-label="Ganti tema" title="Ganti tema">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <button id="logoutBtn" class="icon-btn" aria-label="Keluar" title="Keluar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l-5-5 5-5M5 12h11"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <nav id="sidebar" class="sidebar" aria-label="Navigasi utama">
+    <button class="nav-item is-active" data-view="monitor">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2-6 3 12 2.5-8 2 5h5.5"/></svg>
+      <span>Monitor</span>
+    </button>
+    <button class="nav-item" data-view="occupancy">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span>Okupansi</span>
+    </button>
+    <button class="nav-item" data-view="recordings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/></svg>
+      <span>Rekaman</span>
+    </button>
+    <button class="nav-item" data-view="schedule">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
+      <span>Jadwal</span>
+    </button>
+    <button class="nav-item" data-view="admin">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.4 9.1-8 10-4.6-.9-8-5-8-10V6z"/></svg>
+      <span>Admin</span>
+    </button>
+  </nav>
+
+  <div id="scrim" class="scrim" hidden></div>
+
+  <main class="content">
+
+    <!-- ============ VIEW: MONITOR ============ -->
+    <section class="view is-active" id="view-monitor">
+      <div class="panel-stack">
+
+        <div class="card grow">
+          <div class="card-head">
+            <h2>Spektrum</h2>
+            <div class="card-head-actions">
+              <label class="select-mini">
+                <span>Skala Y</span>
+                <select id="scaleSelect">
+                  <option value="auto" selected>Auto Range</option>
+                  <option value="60">60 dB</option>
+                  <option value="70">70 dB</option>
+                  <option value="80">80 dB</option>
+                  <option value="100">100 dB</option>
+                </select>
+              </label>
+              <div class="trace-modes" role="group" aria-label="Mode trace">
+                <button id="traceRealtimeBtn" class="btn btn-ghost btn-sm trace-btn is-on" type="button" aria-pressed="true" title="Trace sapuan seketika">Realtime</button>
+                <button id="traceMaxHoldBtn" class="btn btn-ghost btn-sm trace-btn" type="button" aria-pressed="false" title="Pertahankan puncak tertinggi">Max Hold</button>
+                <button id="traceAvgBtn" class="btn btn-ghost btn-sm trace-btn" type="button" aria-pressed="false" title="Rerata eksponensial lintas sapuan">Average</button>
+                <button id="resetTraceBtn" class="btn btn-ghost btn-sm" type="button" title="Bersihkan memori Max Hold & Average">Reset Trace</button>
+              </div>
+              <span class="head-sep" aria-hidden="true"></span>
+              <div class="marker-modes" role="group" aria-label="Marker spektrum">
+                <button id="markerPeakBtn" class="btn btn-ghost btn-sm marker-btn" type="button" aria-pressed="false" title="Lacak puncak tertinggi otomatis">Marker Puncak</button>
+                <button id="markerManualBtn" class="btn btn-ghost btn-sm marker-btn" type="button" aria-pressed="false" title="Klik kanvas untuk menaruh marker">Marker Manual</button>
+                <button id="markerClearBtn" class="btn btn-ghost btn-sm" type="button" title="Hapus marker">Hapus Marker</button>
+              </div>
+            </div>
+          </div>
+          <div class="span-toolbar" role="group" aria-label="Navigasi rentang spektrum">
+            <button id="panLeftBtn" class="btn btn-ghost btn-sm" type="button" title="Geser tampilan ke frekuensi lebih rendah (25% span)">◀ Geser Kiri</button>
+            <button id="panRightBtn" class="btn btn-ghost btn-sm" type="button" title="Geser tampilan ke frekuensi lebih tinggi (25% span)">Geser Kanan ▶</button>
+            <span class="span-sep" aria-hidden="true"></span>
+            <button id="zoomInBtn" class="btn btn-ghost btn-sm" type="button" title="Perlebar rentang tampilan (span / 2)">🔍+ Zoom In</button>
+            <button id="zoomOutBtn" class="btn btn-ghost btn-sm" type="button" title="Persempit rentang tampilan (span × 2)">🔍− Zoom Out</button>
+            <button id="resetSpanBtn" class="btn btn-ghost btn-sm" type="button" title="Kembalikan ke rentang bawaan preset aktif">↺ Reset Span</button>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="spectrumCanvas" aria-label="Grafik spektrum"></canvas>
+            <div id="markerReadout" class="marker-readout" hidden></div>
+            <div id="cropOverlay" class="crop-overlay" hidden>
+              <div id="cropBox" class="crop-box"></div>
+              <span id="cropLabel" class="crop-label"></span>
+            </div>
+          </div>
+          <p class="canvas-hint">
+            Klik kanvas: taruh marker (atau pindah frekuensi audio saat dengar) · Seret kiri: crop rentang ·
+            Seret kanan / Ctrl+seret: geser span · Roda: zoom · Alt+klik: dengar frekuensi itu
+          </p>
+
+          <!-- Bilah kontrol audio & marker terintegrasi layar Monitor -->
+          <div class="monitor-audio-bar" aria-label="Kontrol audio monitor">
+            <div class="mab-group mab-freq">
+              <label class="mab-field">
+                <span>Frekuensi (MHz)</span>
+                <input id="monListenFreq" type="number" step="0.0001" class="input-mini" placeholder="cth. 101.4">
+              </label>
+              <label class="mab-field mab-demod">
+                <span>Demod</span>
+                <select id="monListenDemod" class="input-mini">
+                  <option>FM</option><option>AM</option><option>USB</option>
+                  <option>LSB</option><option>CW</option>
+                </select>
+              </label>
+              <button id="monListenMarkerBtn" class="btn btn-ghost btn-sm" type="button"
+                      title="Pindahkan frekuensi marker ke penerima audio" disabled>🎯 Frek. Marker</button>
+            </div>
+            <div class="mab-group">
+              <button id="monListenToggleBtn" class="btn btn-primary btn-sm" type="button">🎧 Dengar</button>
+              <button id="monRecordToggleBtn" class="btn btn-record btn-sm" type="button">⏺ Rekam</button>
+              <span id="monRecordTimer" class="rec-timer" hidden>00:00</span>
+            </div>
+            <div class="mab-group mab-vol">
+              <label class="mab-field">
+                <span>Volume</span>
+                <input id="monVolumeRange" type="range" min="0" max="100" value="70">
+              </label>
+              <div class="vu-meter vu-mini" aria-hidden="true"><div id="monVuBar" class="vu-bar"></div></div>
+            </div>
+            <div class="mab-group mab-occ">
+              <button id="occToggleBtn" class="btn btn-ghost btn-sm" type="button"
+                      data-enabled="true" title="Jeda / lanjutkan akumulasi okupansi">
+                <span class="occ-dot is-on"></span><span id="occToggleLabel">Jeda Okupansi</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="axis-legend">
+            <span id="spanInfo">Span: —</span>
+            <span id="rbwInfo">RBW: —</span>
+            <span id="vbwInfo">VBW: —</span>
+            <span id="stepInfo">Step: —</span>
+            <span id="chbwInfo">Ch BW: —</span>
+            <span id="nfInfo">Noise floor: —</span>
+            <span id="thrInfo">Threshold: —</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Waterfall</h2>
+            <div class="card-head-actions">
+              <label class="select-mini">
+                <span>Palet</span>
+                <select id="paletteSelect">
+                  <option value="turbo">Turbo</option>
+                  <option value="viridis">Viridis</option>
+                  <option value="jet">Jet</option>
+                  <option value="gray">Monokrom</option>
+                </select>
+              </label>
+              <label class="range-mini">
+                <span>Kontras</span>
+                <input id="waterfallGain" type="range" min="0" max="30" value="0" step="1">
+              </label>
+            </div>
+          </div>
+          <div class="canvas-wrap waterfall-wrap">
+            <canvas id="waterfallCanvas" aria-label="Waterfall spektrogram"></canvas>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ============ VIEW: OKUPANSI ============ -->
+    <section class="view" id="view-occupancy">
+      <div class="card">
+        <div class="card-head">
+          <h2>Okupansi Kanal</h2>
+          <div class="card-head-actions">
+            <button id="occToggleViewBtn" class="btn btn-ghost btn-sm" type="button"
+                    data-enabled="true" title="Jeda / lanjutkan akumulasi okupansi">
+              <span class="occ-dot is-on"></span><span id="occToggleViewLabel">Jeda Okupansi</span>
+            </button>
+            <span id="occSummary" class="muted-sm">—</span>
+            <span class="head-sep" aria-hidden="true"></span>
+            <span id="occSelectedCount" class="muted-sm" hidden>0 dipilih</span>
+            <button id="deleteSelectedOccBtn" class="btn btn-danger btn-sm" type="button" disabled>Hapus Terpilih</button>
+            <button id="resetOccBtn" class="btn btn-ghost btn-sm btn-danger-outline" type="button">Hapus Semua</button>
+            <span class="head-sep" aria-hidden="true"></span>
+            <button id="exportXlsxBtn" class="btn btn-ghost btn-sm" type="button">Excel</button>
+            <button id="exportCsvBtn" class="btn btn-ghost btn-sm" type="button">CSV</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="data-table" id="occTable">
+            <thead>
+              <tr>
+                <th class="chk-col"><label class="chk-wrap" title="Pilih semua kanal">
+                  <input id="occSelectAll" type="checkbox">
+                </label></th>
+                <th data-sort="freq_mhz" class="sortable">Frekuensi</th>
+                <th data-sort="label" class="sortable">Label</th>
+                <th data-sort="occupancy_pct" class="sortable num">Okupansi</th>
+                <th data-sort="n_above" class="sortable num">Aktif</th>
+                <th data-sort="n_total" class="sortable num">Sampel</th>
+                <th data-sort="peak_dbm" class="sortable num">Puncak</th>
+                <th data-sort="mean_dbm" class="sortable num">Rerata</th>
+                <th data-sort="events" class="sortable num">Kedudukan</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="occBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VIEW: REKAMAN ============ -->
+    <section class="view" id="view-recordings">
+      <div class="card">
+        <div class="card-head">
+          <h2>Rekaman Audio</h2>
+          <div class="card-head-actions">
+            <label class="chk-label" title="Pilih semua file rekaman yang tampil">
+              <input id="recSelectAll" type="checkbox"> <span>Pilih Semua</span>
+            </label>
+            <span id="recSelectedCount" class="muted-sm" hidden>0 dipilih</span>
+            <button id="recDeleteSelectedBtn" class="btn btn-danger btn-sm" type="button" disabled>Hapus Terpilih</button>
+            <button id="recDeleteAllBtn" class="btn btn-ghost btn-sm btn-danger-outline" type="button">Hapus Semua</button>
+            <span class="head-sep" aria-hidden="true"></span>
+            <input id="recFilter" class="input-mini" type="search" placeholder="Cari frekuensi…" aria-label="Cari rekaman">
+            <button id="recRefreshBtn" class="btn btn-ghost btn-sm" type="button">Muat ulang</button>
+          </div>
+        </div>
+        <div id="recList" class="rec-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ VIEW: JADWAL ============ -->
+    <section class="view" id="view-schedule">
+      <div class="panel-grid">
+        <div class="card">
+          <div class="card-head"><h2>Kampanye Survei</h2></div>
+          <div id="schedActive" class="sched-active" hidden></div>
+          <div id="schedList" class="sched-list"></div>
+        </div>
+        <div class="panel-stack">
+          <div class="card" id="newSchedCard">
+            <div class="card-head"><h2>Buat Jadwal Survei</h2></div>
+            <form id="newScheduleForm" class="form-stack">
+              <label class="field"><span>Nama kampanye</span>
+                <input id="scName" type="text" required minlength="2" maxlength="100" placeholder="cth. VHF Marine — Malam"></label>
+              <div class="row-2">
+                <label class="field"><span>Preset pita</span>
+                  <select id="scPreset"></select></label>
+                <label class="field"><span>Mulai</span>
+                  <input id="scStart" type="datetime-local" required></label>
+              </div>
+              <div class="row-2">
+                <label class="field"><span>Durasi (menit)</span>
+                  <input id="scDuration" type="number" min="1" max="10080" step="1" value="60"></label>
+                <label class="field"><span>Ulangi</span>
+                  <select id="scRepeat">
+                    <option value="none">Sekali</option>
+                    <option value="daily">Harian</option>
+                    <option value="weekly">Mingguan</option>
+                  </select></label>
+              </div>
+              <label class="field"><span>Mode ambang batas</span>
+                <select id="scThresholdMode">
+                  <option value="adaptive">Adaptif — noise floor + offset</option>
+                  <option value="fixed">Tetap — dBm absolut</option>
+                </select></label>
+              <div class="row-2">
+                <label class="field" id="scOffsetWrap"><span>Offset adaptif (dB)</span>
+                  <input id="scAdaptiveOffset" type="number" min="0" max="60" step="0.5" value="10"></label>
+                <label class="field" id="scFixedWrap"><span>Ambang tetap (dBm)</span>
+                  <input id="scFixedThreshold" type="number" min="-150" max="20" step="0.5" value="-85"></label>
+              </div>
+              <label class="switch"><input id="scAutoRecord" type="checkbox" checked>
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+                <span class="switch-label">Rekam audio otomatis saat kanal aktif</span></label>
+              <button class="btn btn-primary" type="submit">Buat Jadwal</button>
+            </form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Riwayat</h2></div>
+            <div id="runHistory" class="run-history"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VIEW: ADMIN ============ -->
+    <section class="view" id="view-admin">
+      <div class="panel-grid">
+        <div class="card">
+          <div class="card-head"><h2>Pengguna</h2></div>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th>Nama</th><th>Peran</th><th>Status</th><th></th></tr></thead>
+              <tbody id="userBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Tambah Pengguna</h2></div>
+          <form id="newUserForm" class="form-stack">
+            <label class="field"><span>Nama pengguna</span>
+              <input id="nuName" required minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+"></label>
+            <label class="field"><span>Kata sandi (min 8)</span>
+              <input id="nuPass" type="password" required minlength="8" autocomplete="new-password"></label>
+            <label class="field"><span>Peran</span>
+              <select id="nuRole">
+                <option value="viewer">viewer — hanya lihat</option>
+                <option value="operator">operator — kontrol RF</option>
+                <option value="admin">admin — penuh</option>
+              </select></label>
+            <button class="btn btn-primary" type="submit">Buat pengguna</button>
+          </form>
+          <hr class="sep">
+          <h3 class="h3">Ganti Kata Sandi Saya</h3>
+          <form id="pwForm" class="form-stack">
+            <label class="field"><span>Kata sandi saat ini</span>
+              <input id="pwOld" type="password" required autocomplete="current-password"></label>
+            <label class="field"><span>Kata sandi baru (min 8)</span>
+              <input id="pwNew" type="password" required minlength="8" autocomplete="new-password"></label>
+            <button class="btn btn-ghost" type="submit">Perbarui</button>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Mode Perangkat</h2></div>
+          <div class="form-stack">
+            <div class="row-2">
+              <label class="field"><span>Nomor seri SA124B</span>
+                <input id="devSerial" type="number" min="1" max="2147483647" step="1"
+                       placeholder="auto-detect" value="23276018"></label>
+              <label class="field"><span>Mode</span>
+                <select id="devMode">
+                  <option value="hardware">Instrumen fisik (SA124B)</option>
+                  <option value="simulator">Simulator (tanpa perangkat keras)</option>
+                </select></label>
+            </div>
+            <div id="devStatus" class="muted-sm" style="min-height: 1.4em"></div>
+            <button id="devApplyBtn" class="btn btn-ghost">Terapkan &amp; Sambung Ulang</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============ PANEL KONTROL ============ -->
+  <aside class="controlbar" aria-label="Panel kontrol RF">
+
+    <div class="ctrl-group">
+      <h3>Preset Pita</h3>
+      <select id="presetSelect" class="input-full"></select>
+      <p id="presetDesc" class="muted-sm">—</p>
+    </div>
+
+    <div class="ctrl-group">
+      <h3>Sapuan</h3>
+      <label class="field"><span>Center (MHz)</span>
+        <input id="centerInput" type="number" step="0.0001" class="input-full"></label>
+      <label class="field"><span>Span (MHz)</span>
+        <input id="spanInput" type="number" step="0.0001" class="input-full"></label>
+      <label class="field"><span>RBW (kHz)</span>
+        <input id="rbwInput" type="number" step="0.1" class="input-full"></label>
+      <div class="row-2">
+        <label class="field"><span>Ref (dBm)</span>
+          <input id="refInput" type="number" step="1" class="input-full"></label>
+        <label class="field"><span>Atenuasi (dB)</span>
+          <input id="attenInput" type="number" step="1" min="0" max="60" class="input-full"></label>
+      </div>
+      <button id="applySweepBtn" class="btn btn-ghost btn-block">Terapkan</button>
+    </div>
+
+    <div class="ctrl-group">
+      <h3>Dengar Langsung</h3>
+      <label class="field"><span>Frekuensi (MHz)</span>
+        <input id="listenFreq" type="number" step="0.0001" class="input-full"></label>
+      <div class="row-2">
+        <label class="field"><span>Demod</span>
+          <select id="listenDemod" class="input-full">
+            <option>FM</option><option>AM</option><option>USB</option>
+            <option>LSB</option><option>CW</option>
+          </select></label>
+        <label class="field"><span>Volume</span>
+          <input id="volumeRange" type="range" min="0" max="100" value="70" class="input-full"></label>
+      </div>
+      <div class="row-2">
+        <button id="listenBtn" class="btn btn-primary">Dengar</button>
+        <button id="listenStopBtn" class="btn btn-ghost">Stop</button>
+      </div>
+      <div class="vu-meter" aria-hidden="true"><div id="vuBar" class="vu-bar"></div></div>
+    </div>
+
+    <div class="ctrl-group">
+      <h3>Rekam Otomatis</h3>
+      <label class="switch">
+        <input id="autoRecordToggle" type="checkbox">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-label">Rekam saat kanal aktif</span>
+      </label>
+      <label class="field"><span>Ambang batas</span>
+        <select id="thresholdMode" class="input-full">
+          <option value="adaptive">Adaptif (noise + offset)</option>
+          <option value="fixed">Tetap</option>
+        </select></label>
+      <label class="field"><span>Offset (dB)</span>
+        <input id="offsetInput" type="number" step="1" class="input-full"></label>
+      <label class="field"><span>Dwell maks (detik)</span>
+        <input id="dwellInput" type="number" step="1" class="input-full"></label>
+      <button id="applyOccBtn" class="btn btn-ghost btn-block">Terapkan</button>
+    </div>
+
+    <div class="ctrl-group">
+      <h3>Jalankan Survei</h3>
+      <div class="row-2">
+        <button id="engineStartBtn" class="btn btn-primary">Mulai</button>
+        <button id="engineStopBtn" class="btn btn-danger">Henti</button>
+      </div>
+      <p class="muted-sm">Kontrol ini memerlukan peran <b>operator</b> atau <b>admin</b>.</p>
+    </div>
+
+  </aside>
+
+  <!-- ============ BILAH BAWAH (MOBILE) ============ -->
+  <nav class="bottombar" aria-label="Navigasi bawah">
+    <button class="bb-item is-active" data-view="monitor">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3l2-6 3 12 2.5-8 2 5h5.5"/></svg><span>Monitor</span>
+    </button>
+    <button class="bb-item" data-view="occupancy">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Okupansi</span>
+    </button>
+    <button class="bb-item" data-view="recordings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/></svg><span>Rekaman</span>
+    </button>
+    <button class="bb-item" data-view="schedule">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg><span>Jadwal</span>
+    </button>
+    <button id="controlsToggle" class="bb-item bb-ctrl">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Kontrol</span>
+    </button>
+  </nav>
+
+</div>
+
+<!-- ===================== MODAL: WAJIB GANTI KATA SANDI ===================== -->
+<div id="pwGate" class="modal-screen" hidden>
+  <form id="pwGateForm" class="login-card" autocomplete="on">
+    <div class="login-brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 4v6c0 5-3.4 9.1-8 10-4.6-.9-8-5-8-10V6z"/></svg>
+      <div>
+        <h1>GANTI KATA SANDI</h1>
+        <p>Akun ini masih memakai kata sandi awal</p>
+      </div>
+    </div>
+
+    <p class="muted-sm" style="margin:0 0 14px">
+      Kata sandi awal hanya ditampilkan sekali di konsol saat basis data pengguna
+      pertama kali dibuat. Tetapkan kata sandi baru untuk melanjutkan — sesi akan
+      diakhiri dan Anda login ulang.
+    </p>
+
+    <label class="field">
+      <span>Kata sandi saat ini</span>
+      <input id="pgOld" type="password" required autocomplete="current-password">
+    </label>
+    <label class="field">
+      <span>Kata sandi baru (min 8)</span>
+      <input id="pgNew" type="password" required minlength="8" autocomplete="new-password">
+    </label>
+    <label class="field">
+      <span>Ulangi kata sandi baru</span>
+      <input id="pgNew2" type="password" required minlength="8" autocomplete="new-password">
+    </label>
+
+    <div id="pgError" class="login-error" role="alert" hidden></div>
+
+    <button id="pgSubmit" class="btn btn-primary btn-block" type="submit">Simpan &amp; Login Ulang</button>
+  </form>
+</div>
+
+<!-- ===================== MODAL: PILIH PERANGKAT ===================== -->
+<div id="deviceModal" class="modal-screen" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <h2>Pilih Perangkat RF</h2>
+      </div>
+      <button id="closeDevModalBtn" class="icon-btn" type="button" aria-label="Tutup">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body form-stack">
+      <div id="devDriverStatus" class="diag-banner"></div>
+      <label class="field">
+        <span>Sumber Perangkat</span>
+        <select id="modalDevChoice" class="input-full"></select>
+      </label>
+      <div class="field" id="modalDevCustomSerialWrap" hidden>
+        <span>Nomor Seri Manual</span>
+        <input id="modalDevCustomSerial" type="number" min="1" max="2147483647" placeholder="cth. 23276018" class="input-full">
+      </div>
+      <div id="modalDevActiveInfo" class="muted-sm"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="modalDevRescanBtn" class="btn btn-ghost btn-sm" type="button">🔄 Pindai Ulang USB</button>
+      <div style="flex:1"></div>
+      <button id="modalDevCancelBtn" class="btn btn-ghost btn-sm" type="button">Batal</button>
+      <button id="modalDevApplyBtn" class="btn btn-primary btn-sm" type="button">Terapkan &amp; Sambung</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
