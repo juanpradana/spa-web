@@ -95,6 +95,9 @@ const state = {
   panActive: false,
   panStartX: 0,
   wheelZoomTimeout: null,
+
+  // Anti-spam toast bila polling status gagal berulang
+  statusErrShown: false,
 };
 
 // --------------------------------------------------------------------------- //
@@ -623,7 +626,7 @@ function parseSpectrumBinary(buffer) {
   }
 
   state.lastFrameAt = performance.now();
-  requestAnimationFrame(drawSpectrum);
+  scheduleDraw();
   drawWaterfallRow(levels, noiseFloor);
 }
 
@@ -632,6 +635,25 @@ function parseSpectrumBinary(buffer) {
 // --------------------------------------------------------------------------- //
 let specCanvas, specCtx;
 let markerX = null;
+
+// Penjaga rantai requestAnimationFrame. Sebelum ini, drawSpectrum() menjadwalkan
+// frame berikutnya setiap kali dipanggil DAN refreshStatus() (poll 3 detik)
+// menambah satu lagi — sehingga sesi dengar panjang menumpuk ratusan rantai rAF
+// paralel sampai ribuan gambar per detik (CPU 100%, UI tersendat).
+let drawRafPending = false;
+
+/**
+ * Jadwalkan SATU frame gambar. Aman dipanggil dari banyak tempat sekaligus:
+ * selama satu frame belum tergambar, pemanggilan berikutnya tidak menumpuk.
+ */
+function scheduleDraw() {
+  if (drawRafPending) return;
+  drawRafPending = true;
+  requestAnimationFrame(() => {
+    drawRafPending = false;
+    drawSpectrum();
+  });
+}
 
 function initSpectrumCanvas() {
   specCanvas = document.getElementById("spectrumCanvas");
@@ -1134,7 +1156,7 @@ function drawSpectrum() {
   const isListeningMode = state.isListening || state.rfState === "MANUAL_AUDIO";
   if (!f || (!isListeningMode && performance.now() - state.lastFrameAt > 3500)) {
     drawSpectrumStatus(w, h, isListeningMode ? "Demodulasi Audio Manual" : "Menunggu sapuan…");
-    if (isListeningMode) requestAnimationFrame(drawSpectrum); // jaga jedaan pulsa
+    if (isListeningMode) scheduleDraw(); // jaga jedaan pulsa
     return;
   }
 
@@ -1199,11 +1221,16 @@ function drawSpectrum() {
   }
 
   // Trace Spektrum Utama (Realtime)
+  // Saat sapuan dijeda (dengar/dwell), frame ini adalah SNAPSHOT terakhir —
+  // diredupkan supaya operator tidak salah mengira masih data live.
   if (state.traceRealtime) {
+    const isSnapshot = isListeningMode;
     const grad = specCtx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, "rgba(59, 130, 246, 0.35)");
+    grad.addColorStop(0, `rgba(59, 130, 246, ${isSnapshot ? 0.14 : 0.35})`);
     grad.addColorStop(1, "rgba(59, 130, 246, 0.0)");
 
+    specCtx.save();
+    if (isSnapshot) specCtx.globalAlpha = 0.45;
     specCtx.fillStyle = grad;
     specCtx.strokeStyle = "#3b82f6";
     specCtx.lineWidth = 1.5;
@@ -1228,6 +1255,7 @@ function drawSpectrum() {
       else specCtx.lineTo(x, y);
     }
     specCtx.stroke();
+    specCtx.restore();
   }
 
   // Sumbu-X: garis grid vertikal + label frekuensi MHz.
@@ -1257,13 +1285,16 @@ function drawSpectrum() {
   // oleh rAF sampai state kembali SWEEPING.
   if (state.rfState === "DWELL_RECORD") {
     drawSpectrumStatus(w, h, "Merekam Audio Dwell");
-    requestAnimationFrame(drawSpectrum);
+    drawWaterfallPauseOverlay();
+    scheduleDraw();
   } else if (state.rfState === "MANUAL_AUDIO") {
     // Jangan lagi menutupi seluruh kanvas dengan kotak besar — taruh badge ringkas
     // di kanan atas dan gambar garis pembawa (carrier line) untuk tuning visual.
     drawListenBadge(specCtx, w, h);
     drawCarrierLine(specCtx, w, h);
-    requestAnimationFrame(drawSpectrum);
+    drawSnapshotWatermark(w, h);
+    drawWaterfallPauseOverlay();
+    scheduleDraw();
   }
 }
 
@@ -1504,6 +1535,31 @@ function _demodBandwidthHz(demod) {
   }
 }
 
+function drawSnapshotWatermark(w, h) {
+  specCtx.save();
+  const text = "SNAPSHOT SAPUAN TERAKHIR · SAPUAN DIJEDA SAAT DENGAR";
+  specCtx.font = "bold 10px monospace";
+  const tw = specCtx.measureText(text).width;
+  const bx = 10;
+  const by = 8;
+  const bw = tw + 18;
+  const bh = 20;
+
+  specCtx.fillStyle = "rgba(10, 14, 20, 0.78)";
+  specCtx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+  specCtx.lineWidth = 1;
+  specCtx.beginPath();
+  specCtx.roundRect(bx, by, bw, bh, 4);
+  specCtx.fill();
+  specCtx.stroke();
+
+  specCtx.fillStyle = "rgba(148, 163, 184, 0.95)";
+  specCtx.textAlign = "left";
+  specCtx.textBaseline = "middle";
+  specCtx.fillText(`⏸ ${text}`, bx + 8, by + bh / 2);
+  specCtx.restore();
+}
+
 function drawCarrierLine(ctx, w, h) {
   const f = state.spectrumFrame;
   if (!f) return;
@@ -1696,6 +1752,70 @@ function drawWaterfallRow(levels, noiseFloor) {
   wfCtx.drawImage(wfOffscreen, 0, 0);
 }
 
+/**
+ * Overlay "DIJEDA" pada panel waterfall.
+ *
+ * SA124B hanya punya SATU tuner RF: saat LO dipakai mendemodulasi audio, LO tidak
+ * bisa menyapu — jadi tidak ada frame spektrum baru dan waterfall secara fisik
+ * berhenti bergulir. Tanpa penanda ini panel tampak "mati/macet" dan operator
+ * menyangka aplikasi hang. Overlay membuat penyebabnya eksplisit.
+ *
+ * Dipanggil dari drawSpectrum() setiap kali sapuan dijeda; saat frame baru masuk,
+ * drawWaterfallRow() langsung menimpanya sehingga overlay hilang sendiri.
+ */
+function drawWaterfallPauseOverlay() {
+  if (!wfCtx || wfCanvas.width === 0) return;
+  const w = wfCanvas.width;
+  const h = wfCanvas.height;
+
+  wfCtx.save();
+
+  // Gelap tipis supaya spektrogram terakhir masih terlihat di balik overlay
+  wfCtx.fillStyle = "rgba(10, 14, 20, 0.55)";
+  wfCtx.fillRect(0, 0, w, h);
+
+  // Garis putus-putus horizontal penanda status dijeda
+  wfCtx.strokeStyle = "rgba(56, 189, 248, 0.55)";
+  wfCtx.lineWidth = 1;
+  wfCtx.setLineDash([6, 6]);
+  wfCtx.beginPath();
+  wfCtx.moveTo(0, h / 2);
+  wfCtx.lineTo(w, h / 2);
+  wfCtx.stroke();
+  wfCtx.setLineDash([]);
+
+  // Kapsul label di tengah panel
+  const label = "WATERFALL DIJEDA";
+  const sub = "SA124B 1 tuner — dengar audio & sapuan spektrum tidak bisa bersamaan";
+  wfCtx.font = "bold 12px monospace";
+  const lw = wfCtx.measureText(label).width;
+  wfCtx.font = "10px monospace";
+  const sw = wfCtx.measureText(sub).width;
+  const boxW = Math.max(lw, sw) + 24;
+  const boxH = 44;
+  const bx = (w - boxW) / 2;
+  const by = (h - boxH) / 2;
+
+  wfCtx.fillStyle = "rgba(10, 14, 20, 0.88)";
+  wfCtx.strokeStyle = "rgba(56, 189, 248, 0.6)";
+  wfCtx.lineWidth = 1;
+  wfCtx.beginPath();
+  wfCtx.roundRect(bx, by, boxW, boxH, 6);
+  wfCtx.fill();
+  wfCtx.stroke();
+
+  wfCtx.textAlign = "center";
+  wfCtx.textBaseline = "middle";
+  wfCtx.fillStyle = "#38bdf8";
+  wfCtx.font = "bold 12px monospace";
+  wfCtx.fillText(label, w / 2, by + 15);
+  wfCtx.fillStyle = "rgba(183, 194, 207, 0.9)";
+  wfCtx.font = "10px monospace";
+  wfCtx.fillText(sub, w / 2, by + 30);
+
+  wfCtx.restore();
+}
+
 // --------------------------------------------------------------------------- //
 // Web Audio API Streaming Player (PCM Float32)
 // --------------------------------------------------------------------------- //
@@ -1845,6 +1965,10 @@ async function stopListening() {
   const monVu = document.getElementById("monVuBar");
   if (monVu) monVu.style.width = "0%";
   syncAudioButtons();
+
+  // Sapuan kembali aktif: bersihkan overlay "dijeda" dan gambar ulang segera.
+  state.rfState = "SWEEPING";
+  scheduleDraw();
 
   try {
     await api("/api/rf/listen/stop", { method: "POST" });
@@ -2773,11 +2897,17 @@ async function refreshStatus() {
     // Polling status tetap menggambar ulang supaya overlay jeda terlihat.
     if (s.state === "DWELL_RECORD" || s.state === "MANUAL_AUDIO") {
       state.dwellFreqMhz = s.dwell_freq_hz ? s.dwell_freq_hz / 1e6 : state.dwellFreqMhz;
-      requestAnimationFrame(drawSpectrum);
+      scheduleDraw();
     }
 
     const metaText = document.getElementById("metaText");
-    if (metaText) metaText.textContent = `${s.fps} fps · ${s.temperature_c !== null ? s.temperature_c + " °C" : "—"}`;
+    if (metaText) {
+      // Di luar SWEEPING, counter fps engine menghitung iterasi loop audio
+      // (~8/detik) — menampilkannya sebagai "fps" membuat operator mengira
+      // sapuan masih berjalan padahal sudah dijeda.
+      const fpsTxt = s.state === "SWEEPING" ? `${s.fps} fps` : "sapuan dijeda";
+      metaText.textContent = `${fpsTxt} · ${s.temperature_c !== null ? s.temperature_c + " °C" : "—"}`;
+    }
 
     // Sinkronisasi status autorecord
     const autoBox = document.getElementById("autoRecordToggle");
@@ -2819,7 +2949,7 @@ async function refreshStatus() {
       if (s.manual_freq_hz) state.listenFreqHz = Number(s.manual_freq_hz);
       if (s.manual_demod) state.listenDemod = String(s.manual_demod);
       syncAudioButtons();
-      if (wasListening !== state.isListening) drawSpectrum();
+      if (wasListening !== state.isListening) scheduleDraw();
     }
 
     // Pelajari threshold terkini dari status perangkat
@@ -2829,7 +2959,16 @@ async function refreshStatus() {
     }
 
     syncConfigToForm();
-  } catch {}
+  } catch (err) {
+    // Jangan telan senyap: kegagalan berulang (401/jaringan/500) sebelumnya tidak
+    // meninggalkan jejak apa pun — operator hanya melihat angka status membeku.
+    // Ditampilkan sekali dengan jeda 15 detik agar tidak membanjiri toast tiap 3 s.
+    if (!state.statusErrShown) {
+      state.statusErrShown = true;
+      toast(`Status RF gagal dimuat: ${err.message}`, "err");
+      setTimeout(() => { state.statusErrShown = false; }, 15000);
+    }
+  }
 }
 
 async function refreshPresets() {

@@ -162,7 +162,8 @@
           <p class="canvas-hint">
             Saat dengar: tarik garis 🎧 atau geser di kanvas untuk tuning frekuensi · Klik: pindah ke frekuensi itu ·
             Saat tidak dengar: klik kanvas: taruh marker · Seret kiri: crop rentang ·
-            seret kanan: geser span · roda: zoom · Alt+klik: dengar frekuensi itu
+            seret kanan: geser span · roda: zoom · Alt+klik: dengar frekuensi itu<br>
+            <span class="muted-sm">ℹ️ <b>Catatan Hardware:</b> SA124B memiliki 1 tuner fisik — saat mendengarkan audio, sapuan spektrum &amp; waterfall otomatis dijeda agar demodulasi tidak terputus (bukan error). Tekan <b>Stop Dengar</b> untuk melanjutkan sapuan.</span>
           </p>
 
           <!-- Bilah kontrol audio & marker terintegrasi layar Monitor -->
@@ -183,7 +184,8 @@
                       title="Pindahkan frekuensi marker ke penerima audio" disabled>🎯 Frek. Marker</button>
             </div>
             <div class="mab-group">
-              <button id="monListenToggleBtn" class="btn btn-primary btn-sm" type="button">🎧 Dengar</button>
+              <button id="monListenToggleBtn" class="btn btn-primary btn-sm" type="button"
+                      title="SA124B hanya memiliki 1 tuner RF — sapuan spektrum &amp; waterfall otomatis dijeda selama mendengarkan audio. Tekan 'Stop Dengar' untuk melanjutkan sapuan.">🎧 Dengar</button>
               <button id="monRecordToggleBtn" class="btn btn-record btn-sm" type="button">⏺ Rekam</button>
               <span id="monRecordTimer" class="rec-timer" hidden>00:00</span>
             </div>

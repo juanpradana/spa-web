@@ -137,8 +137,13 @@ const sandbox = {
   document: documentMock,
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   location: { protocol: "http:", host: "localhost:3487" },
+  devicePixelRatio: 1,
   performance: { now: () => 0 },
-  requestAnimationFrame: () => 0,
+  // Antrean rAF yang bisa "dipanaskan" (flush) manual. Callback TIDAK dipanggil
+  // otomatis — supaya tes dapat membuktikan scheduleDraw() menyatukan banyak
+  // pemicu menjadi SATU frame, lalu memverifikasi penjadwalan berikutnya
+  // diizinkan setelah frame itu benar-benar dieksekusi.
+  requestAnimationFrame: (cb) => { sandbox.__rafQueue.push(cb); return sandbox.__rafQueue.length; },
   // Timer tidak dijalankan agar proses Node tidak menggantung.
   setTimeout: () => 0,
   clearTimeout: () => {},
@@ -160,6 +165,7 @@ sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 sandbox.window.AudioContext = FakeAudioContext;
 sandbox.window.addEventListener = () => {};
+sandbox.__rafQueue = [];
 
 // Rekam isi toast agar galat yang tertelan try/catch tetap terdeteksi.
 const toastHost = getEl("toastHost");
@@ -249,6 +255,67 @@ async function main() {
 
   console.log("\n== 5. Tidak ada variabel mati drawScheduled ==");
   check("drawScheduled tidak diekspos", sandbox.drawScheduled === undefined);
+
+  console.log("\n== 6. scheduleDraw() tidak menumpuk rantai rAF ==");
+  check("scheduleDraw terdefinisi", typeof sandbox.scheduleDraw === "function");
+  if (typeof sandbox.scheduleDraw === "function") {
+    // Simulasi poll status 3 detik + redraw kanvas yang saling tumpang tindih:
+    // 20 pemanggilan beruntun harus menghasilkan TEPAT SATU frame terjadwal.
+    sandbox.__rafQueue.length = 0;
+    for (let i = 0; i < 20; i++) sandbox.scheduleDraw();
+    check("20 pemanggilan hanya menjadwalkan 1 rAF", sandbox.__rafQueue.length === 1,
+      `rAF=${sandbox.__rafQueue.length}`);
+
+    // Panaskan (flush) frame itu, lalu pastikan penjadwalan berikutnya diizinkan —
+    // inilah yang rusak bila penjaga tidak pernah di-reset.
+    const queued = sandbox.__rafQueue.splice(0);
+    for (const cb of queued) cb();
+    sandbox.scheduleDraw();
+    check("penjadwalan berikutnya diizinkan setelah frame tergambar",
+      sandbox.__rafQueue.length === 1, `rAF=${sandbox.__rafQueue.length}`);
+    // Flush frame kedua agar drawRafPending kembali bersih untuk seksi berikutnya
+    const queued2 = sandbox.__rafQueue.splice(0);
+    for (const cb of queued2) cb();
+  }
+
+  console.log("\n== 7. Overlay jeda & watermark snapshot terdefinisi ==");
+  check("drawWaterfallPauseOverlay terdefinisi",
+    typeof sandbox.drawWaterfallPauseOverlay === "function");
+  check("drawSnapshotWatermark terdefinisi",
+    typeof sandbox.drawSnapshotWatermark === "function");
+
+  console.log("\n== 8. Overlay jeda aman saat kanvas belum siap ==");
+  if (typeof sandbox.drawWaterfallPauseOverlay === "function") {
+    let overlayThrew = null;
+    try {
+      // Tanpa initWaterfallCanvas(), wfCanvas belum didefinisikan — fungsi harus
+      // keluar aman (bukan ReferenceError) karena dijaga `!wfCtx`.
+      sandbox.drawWaterfallPauseOverlay();
+    } catch (err) {
+      overlayThrew = err;
+    }
+    check("tidak melempar saat kanvas belum siap", overlayThrew === null,
+      overlayThrew && overlayThrew.message);
+  }
+
+  console.log("\n== 9. Tanpa frame baru, sapuan dijeda tetap tidak membanjiri rAF ==");
+  sandbox.__rafQueue.length = 0;
+  vm.runInContext(`
+    state.rfState = "MANUAL_AUDIO";
+    state.isListening = true;
+    state.spectrumFrame = {
+      seq: 1, length: 64, timestamp: 0, startHz: 100e6, binSizeHz: 1e5,
+      stopHz: 100e6 + 64 * 1e5, noiseFloor: -100, threshold: -90,
+      levels: new Float32Array(64),
+    };
+  `, sandbox);
+  for (let i = 0; i < 30; i++) {
+    // Meniru drawSpectrum() yang re-schedule dirinya + refreshStatus() yang
+    // menambah pemicu sendiri — dahulu ini melipatgandakan rantai rAF.
+    sandbox.scheduleDraw();
+  }
+  check("30 pemicu campuran hanya 1 rAF", sandbox.__rafQueue.length === 1,
+    `rAF=${sandbox.__rafQueue.length}`);
 
   console.log("\n============================================================");
   console.log(`HASIL: ${pass} lulus, ${fail} gagal`);
