@@ -122,6 +122,11 @@ DEFAULT_SECURITY: Dict[str, Any] = {
     "login_rate_limit": 5,
     "login_rate_window_sec": 60,
     "public_read": False,
+    # Wajib true bila aplikasi dijalankan di belakang reverse proxy
+    # (Caddy/nginx/Traefik/Cloudflare). Saat aktif, `security.client_ip()`
+    # mempercayai header `x-forwarded-for` sehingga pembatasan laju login dan
+    # catatan audit mencatat IP klien ASLI, bukan IP proxy.
+    "trusted_proxy": False,
 }
 
 DEFAULT_DEVICE: Dict[str, Any] = {
@@ -201,6 +206,10 @@ def env_overrides() -> Dict[str, Dict[str, Any]]:
     rate_window = _env_float("SA_LOGIN_RATE_WINDOW_SEC")
     if rate_window is not None:
         out["security"]["login_rate_window_sec"] = rate_window
+
+    trusted_proxy = _env_bool("SA_TRUSTED_PROXY")
+    if trusted_proxy is not None:
+        out["security"]["trusted_proxy"] = trusted_proxy
 
     threshold_mode = _env_str("SA_THRESHOLD_MODE")
     if threshold_mode in ("adaptive", "fixed"):

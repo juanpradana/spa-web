@@ -2,7 +2,7 @@
 FROM python:3.12-slim-bookworm
 
 # Label metadata
-LABEL maintainer="Handfish Project"
+LABEL maintainer="Prism Project"
 LABEL description="Signal Hound SA124B Spectrum Occupancy & Audio Automation Dashboard"
 
 # Hindari buffering output Python dan penulisan file .pyc
@@ -15,7 +15,10 @@ ENV PYTHONUNBUFFERED=1 \
     SA_REPORTS_DIR=/app/reports \
     SA_LOGS_DIR=/app/logs \
     SA_HOST=0.0.0.0 \
-    SA_PORT=8000
+    SA_PORT=3487
+# Catatan: SA_PORT di atas adalah default port INTERNAL container. Nilainya
+# dapat dioverride lewat environment compose (docker-compose.yml) atau .env.
+# Port host dipetakan di compose, tidak di sini.
 
 # Pasang pustaka sistem: libusb untuk akses FTDI / SA124, udev, curl untuk healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,10 +48,11 @@ RUN groupadd -r appgroup && \
 
 USER appuser
 
-EXPOSE 8000
+EXPOSE 3487
 
-# Healthcheck berbasis HTTP REST API endpoint /api/rf/presets
+# Healthcheck berbasis HTTP REST API endpoint root /
+# Port dinamis membaca SA_PORT (default 3487).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://127.0.0.1:8000/ || exit 1
+    CMD curl -f http://127.0.0.1:${SA_PORT:-3487}/ || exit 1
 
 ENTRYPOINT ["python", "server.py"]

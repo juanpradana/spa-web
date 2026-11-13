@@ -1,4 +1,4 @@
-"""Server FastAPI: REST API + WebSocket streaming untuk Handfish.
+"""Server FastAPI: REST API + WebSocket streaming untuk Prism.
 
 Tanggung jawab:
   - Autentikasi JWT HS256 + otorisasi RBAC (admin / operator / viewer).
@@ -10,7 +10,11 @@ Tanggung jawab:
   - Stream biner berlatensi rendah: spektrum float32 (/ws/spectrum),
     audio PCM float32 (/ws/audio), dan event JSON (/ws/events).
 
-Jalankan: `python server.py` atau `uvicorn server:app --host 0.0.0.0 --port 8000`.
+Jalankan: `python server.py` atau `uvicorn server:app --host 0.0.0.0 --port 3487`.
+
+Host & port dibaca dari `SA_HOST` (default `127.0.0.1`) dan `SA_PORT`
+(default `3487`). Di dalam Docker nilainya diberitahukan lewat environment
+compose/Dockerfile, jadi default ini hanya berlaku saat dijalankan native.
 """
 from __future__ import annotations
 
@@ -79,7 +83,7 @@ logging.basicConfig(
     level=os.environ.get("SA_LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger("handfish")
+logger = logging.getLogger("prism")
 
 ENABLE_DOCS = os.environ.get("SA_ENABLE_DOCS", "").lower() in {"1", "true", "yes"}
 
@@ -348,7 +352,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Handfish — SA124B Spectrum Occupancy & Audio Automation",
+    title="Prism — SA124B Spectrum Occupancy & Audio Automation",
     description="Pemantauan okupansi spektrum 100 kHz–12.4 GHz dan perekaman audio otomatis.",
     version="1.0.0",
     lifespan=lifespan,
@@ -986,13 +990,13 @@ async def index():
     page = STATIC_DIR / "index.html"
     if page.exists():
         return FileResponse(page)
-    return {"message": "Handfish API aktif. Antarmuka statis belum tersedia."}
+    return {"message": "Prism API aktif. Antarmuka statis belum tersedia."}
 
 
 if __name__ == "__main__":
     import uvicorn
 
     host = os.environ.get("SA_HOST", "127.0.0.1")
-    port = int(os.environ.get("SA_PORT", "8000"))
-    print(f"[*] Handfish berjalan di http://{host}:{port}")
+    port = int(os.environ.get("SA_PORT", "3487"))
+    print(f"[*] Prism berjalan di http://{host}:{port}")
     uvicorn.run("server:app", host=host, port=port, log_level="info", reload=False)

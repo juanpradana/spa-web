@@ -55,7 +55,13 @@ RATE_LIMITER = RateLimiter()
 
 
 def client_ip(request: Request) -> str:
-    """Ambil IP klien. Header X-Forwarded-For hanya dipercaya bila di belakang proxy."""
+    """Ambil IP klien. Header X-Forwarded-For hanya dipercaya bila di belakang proxy.
+
+    Bila `security.trusted_proxy` true (set `SA_TRUSTED_PROXY=true` di lingkungan
+    yang ber-Caddy/nginx di depan), ambil entri pertama dari header
+    `x-forwarded-for` — yang biasanya adalah IP klien asli. Tanpa flag itu,
+    header dari klien sembarang akan dipalsukan, jadi tetap kembalikan IP socket.
+    """
     from config import CONFIG
 
     cfg = CONFIG.get("security")

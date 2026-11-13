@@ -1,5 +1,5 @@
 /**
- * Handfish — Client Application
+ * Prism — Client Application
  * - Autentikasi JWT HS256 & RBAC
  * - Stream WebSocket Biner: /ws/spectrum, /ws/audio, /ws/events
  * - Render Spektrum 60 FPS (Canvas 2D DPI-aware, Peak Hold, Marker)
@@ -10,8 +10,11 @@
 // --------------------------------------------------------------------------- //
 // State Aplikasi
 // --------------------------------------------------------------------------- //
+const TOKEN_KEY = "prism_token";
+const LEGACY_TOKEN_KEY = "handfish_token";   // migrasi mulus dari nama lama
+
 const state = {
-  token: localStorage.getItem("handfish_token") || null,
+  token: localStorage.getItem(TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY) || null,
   user: null,
   activeView: "monitor",
   device: null,
@@ -287,7 +290,8 @@ function logout() {
   state.token = null;
   state.user = null;
   state.activeView = "monitor";
-  localStorage.removeItem("handfish_token");
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
   if (statusTimer) {
     clearInterval(statusTimer);
     statusTimer = null;
@@ -319,7 +323,8 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
     });
     state.token = res.access_token;
     state.user = res.user;
-    localStorage.setItem("handfish_token", state.token);
+    localStorage.setItem(TOKEN_KEY, state.token);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);   // bersihkan kunci nama lama
     // Tampilkan aplikasi lebih dulu sehingga tunnel WebSocket dibangun dengan
     // token yang baru, lalu muat data.
     document.getElementById("loginScreen").hidden = true;
@@ -431,7 +436,6 @@ let wsAudio = null;
 let wsEvents = null;
 let wsReconnectTimer = null;
 let spectrumFrameSeq = 0;
-let drawScheduled = false;
 
 function connectWebSockets() {
   if (!state.token) return;
@@ -610,9 +614,13 @@ function parseSpectrumBinary(buffer) {
     elChBw.textContent = `Ch BW: ${bwVal ? (bwVal >= 1e6 ? `${(bwVal / 1e6).toFixed(3)} MHz` : `${(bwVal / 1e3).toFixed(1)} kHz`) : "—"}`;
   }
   const elNf = document.getElementById("nfInfo");
-  if (elNf) elNf.textContent = `Noise floor: ${noiseFloor.toFixed(1)} dBm`;
+  if (elNf) {
+    elNf.textContent = `Noise floor: ${Number.isFinite(noiseFloor) ? noiseFloor.toFixed(1) : "—"} dBm`;
+  }
   const elThr = document.getElementById("thrInfo");
-  if (elThr) elThr.textContent = `Threshold: ${threshold.toFixed(1)} dBm`;
+  if (elThr) {
+    elThr.textContent = `Threshold: ${Number.isFinite(threshold) ? threshold.toFixed(1) : "—"} dBm`;
+  }
 
   state.lastFrameAt = performance.now();
   requestAnimationFrame(drawSpectrum);
@@ -690,17 +698,8 @@ function initSpectrumCanvas() {
   }
 
   // -- geser frekuensi audio saat mendengarkan --------------------------- //
-  // Lebar bandwidth passband per mode demod, untuk overlay & visualisasi.
-  function _demodBandwidthHz(demod) {
-    switch (String(demod || "").toUpperCase()) {
-      case "FM": return 150_000;   // passband siaran FM ~150 kHz
-      case "AM": return 8_000;
-      case "USB":
-      case "LSB": return 3_000;
-      case "CW": return 1_000;
-      default: return 15_000;
-    }
-  }
+  // Lebar passband per mode demod kini ada di _demodBandwidthHz() tingkat modul
+  // (dipakai juga oleh drawCarrierLine di luar closure ini).
 
   /** Posisi X (relatif kanvas) dari frekuensi audio — `null` bila di luar sapuan. */
   function _listenLineX() {
@@ -748,15 +747,6 @@ function initSpectrumCanvas() {
     } else {
       fire();
     }
-  }
-
-  /** Tulis frekuensi ke kedua kotak input (drawer samping & bilah monitor). */
-  function _syncListenInputs(freqHz) {
-    const mhz = (freqHz / 1e6).toFixed(4);
-    const mon = document.getElementById("monListenFreq");
-    if (mon) mon.value = mhz;
-    const side = document.getElementById("listenFreq");
-    if (side) side.value = mhz;
   }
 
   function _endListenDrag() {
@@ -1084,7 +1074,8 @@ function updateMarkerReadout(x, width, el) {
   const pwr = f.levels[idx];
 
   el.hidden = false;
-  el.textContent = `M: ${freq.toFixed(4)} MHz · ${pwr.toFixed(1)} dBm`;
+  const dbmTxt = Number.isFinite(pwr) ? pwr.toFixed(1) : "—";
+  el.textContent = `M: ${freq.toFixed(4)} MHz · ${dbmTxt} dBm`;
   drawSpectrum();
 }
 
@@ -1500,6 +1491,19 @@ function drawListenBadge(ctx, w, h) {
   ctx.restore();
 }
 
+// Lebar passband per mode demodulasi — dipakai oleh overlay garis pembawa
+// (drawCarrierLine) dan drag-to-tune, jadi harus berada di scope modul.
+function _demodBandwidthHz(demod) {
+  switch (String(demod || "").toUpperCase()) {
+    case "FM": return 150_000;   // passband siaran FM ~150 kHz
+    case "AM": return 8_000;
+    case "USB":
+    case "LSB": return 3_000;
+    case "CW": return 1_000;
+    default: return 15_000;
+  }
+}
+
 function drawCarrierLine(ctx, w, h) {
   const f = state.spectrumFrame;
   if (!f) return;
@@ -1514,7 +1518,7 @@ function drawCarrierLine(ctx, w, h) {
   if (x < -20 || x > w + 20) return;
 
   const demod = getMonitorDemod();
-  const bwHz = (typeof _demodBandwidthHz === "function") ? _demodBandwidthHz(demod) : 15_000;
+  const bwHz = _demodBandwidthHz(demod);
   const bwPx = Math.max(3, (bwHz / (stopHz - f.startHz)) * w);
 
   ctx.save();
@@ -1751,6 +1755,19 @@ function queueAudioChunk(arrayBuffer) {
 function getMonitorDemod() {
   const sel = document.getElementById("monListenDemod");
   return sel ? sel.value : "FM";
+}
+
+/**
+ * Tulis frekuensi ke kedua kotak input (drawer samping & bilah monitor).
+ * Scope modul: dipakai oleh startListening() dan window.tuneAndListen() yang
+ * keduanya berada di luar closure initSpectrumCanvas().
+ */
+function _syncListenInputs(freqHz) {
+  const mhz = (freqHz / 1e6).toFixed(4);
+  const mon = document.getElementById("monListenFreq");
+  if (mon) mon.value = mhz;
+  const side = document.getElementById("listenFreq");
+  if (side) side.value = mhz;
 }
 
 function syncAudioButtons() {
@@ -2676,9 +2693,9 @@ async function syncConfigToForm() {
       const el = document.getElementById(id);
       if (el && value !== undefined && value !== null) el.value = value;
     };
-    set("centerInput", (sw.center_hz / 1e6).toFixed(4));
-    set("spanInput", (sw.span_hz / 1e6).toFixed(4));
-    set("rbwInput", (sw.rbw_hz / 1e3).toFixed(1));
+    set("centerInput", Number.isFinite(sw.center_hz) ? (sw.center_hz / 1e6).toFixed(4) : "");
+    set("spanInput", Number.isFinite(sw.span_hz) ? (sw.span_hz / 1e6).toFixed(4) : "");
+    set("rbwInput", Number.isFinite(sw.rbw_hz) ? (sw.rbw_hz / 1e3).toFixed(1) : "");
     set("refInput", sw.ref_level_dbm);
     set("attenInput", sw.atten_db);
     // Sinkronkan ref level & RBW ke state render supaya skala Y canvas mengikuti
@@ -2808,7 +2825,7 @@ async function refreshStatus() {
     // Pelajari threshold terkini dari status perangkat
     const thrInfo = document.getElementById("thrInfo");
     if (thrInfo && s.threshold_dbm !== undefined) {
-      thrInfo.textContent = `Threshold: ${s.threshold_dbm.toFixed(1)} dBm`;
+      thrInfo.textContent = `Threshold: ${Number.isFinite(s.threshold_dbm) ? s.threshold_dbm.toFixed(1) : "—"} dBm`;
     }
 
     syncConfigToForm();
@@ -2933,15 +2950,9 @@ function _refreshOccSelectionUI() {
 }
 
 window.tuneAndListen = (freqHz) => {
-  document.getElementById("listenFreq").value = (freqHz / 1e6).toFixed(4);
+  _syncListenInputs(freqHz);
   switchView("monitor");
-  document.getElementById("listenBtn").click();
-};
-
-window.tuneAndListen = (freqHz) => {
-  document.getElementById("listenFreq").value = (freqHz / 1e6).toFixed(4);
-  switchView("monitor");
-  document.getElementById("listenBtn").click();
+  document.getElementById("listenBtn")?.click();
 };
 
 // URL bermedia (tag <audio> / <a download>) tidak dapat mengirim header
@@ -2970,10 +2981,10 @@ async function refreshRecordings() {
           <label class="chk-wrap" title="Pilih rekaman ${escapeHtml(r.filename)}">
             <input type="checkbox" class="rec-chk" data-filename="${escapeHtml(r.filename)}" ${isChecked ? "checked" : ""}>
           </label>
-          <div class="rec-freq">${r.freq_mhz.toFixed(4)} MHz</div>
+          <div class="rec-freq">${Number.isFinite(r.freq_mhz) ? r.freq_mhz.toFixed(4) : "—"} MHz</div>
           <div class="rec-info">
             <div><b>${escapeHtml(r.filename)}</b></div>
-            <div class="muted-sm">${escapeHtml(r.modified)} · Durasi: ${r.duration_sec}s · ${(r.size_bytes / 1024).toFixed(1)} KB</div>
+            <div class="muted-sm">${escapeHtml(r.modified)} · Durasi: ${Number.isFinite(r.duration_sec) ? r.duration_sec : "—"}s · ${Number.isFinite(r.size_bytes) ? (r.size_bytes / 1024).toFixed(1) : "—"} KB</div>
           </div>
           <div class="rec-actions">
             <audio controls preload="none" src="${authedUrl(`/api/recordings/${encodeURIComponent(r.filename)}/stream`)}" style="height:32px; vertical-align:middle;"></audio>

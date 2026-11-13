@@ -68,4 +68,5 @@ desktop.ini
 
 # Browser & MCP Test Artifacts
 .playwright-mcp/
+.claude-flow/
 

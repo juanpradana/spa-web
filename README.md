@@ -1,4 +1,4 @@
-# HANDFISH — Pemantau Okupansi Spektrum & Perekam Audio SA124B
+# PRISM — Pemantau Okupansi Spektrum & Perekam Audio SA124B
 
 Web dashboard untuk **Signal Hound SA124B** (100 kHz – 12.4 GHz): pengukuran
 okupansi kanal berstandar ITU-R, perekaman audio otomatis saat sinyal terdeteksi,
@@ -38,11 +38,11 @@ pemantauan real-time, dan penjadwalan survei.
 2. Salin satu folder proyek dan jalankan di PowerShell:
 
    ```
-   cd handfish
+   cd prism
    .\run.bat
    ```
 
-3. Buka browser: `http://localhost:8000`
+3. Buka browser: `http://localhost:3487`
 
 Server membuat akun `admin` secara otomatis. Kata sandi awal hanya dicetak ke
 konsol **satu kali**, saat basis data pengguna pertama kali dibuat. Akun itu
@@ -54,57 +54,121 @@ diganti kapan saja lewat **Admin → Ganti Kata Sandi**.
 ## Instalasi Native (Linux / Raspberry Pi)
 
 ```
-cd handfish
+cd prism
 chmod +x run.sh
 ./run.sh
 ```
 
-Akses via browser pada host: `http://<ip-host>:8000`.
+Akses via browser pada host: `http://<ip-host>:3487`.
 
-## Instalasi Docker Compose
+## Instalasi Cepat — One-Command Deploy (Direkomendasikan)
+
+**Windows (PowerShell / CMD):**
+```
+deploy.bat
+```
+
+**Linux / macOS / WSL:**
+```
+./deploy.sh
+```
+
+Skrip deployer otomatis:
+- Membuat `.env` dari template jika belum ada
+- Menghasilkan `SECRET_KEY` aman secara otomatis
+- Menetapkan kata sandi admin (`Admin123456!`) dan menampilkannya langsung di konsol
+- Memulai container Prism di port **3487**
+- Mencetak URL akses dan kredensial secara rapi
+
+Opsi tambahan:
+| Flag | Deskripsi |
+|------|-----------|
+| `--hardware` | Aktifkan passthrough USB fisik SA124B (hanya Linux host) |
+| `--proxy` | Aktifkan Caddy reverse proxy HTTPS otomatis (port 80/443) |
+| `--tunnel` | Aktifkan Cloudflare Tunnel (akses remote CGNAT/4G/Starlink) |
+| `--build` | Rebuild image container dari Dockerfile |
+| `--down` | Hentikan semua container |
+| `--logs` | Pantau log realtime |
+| `--status` | Lihat status container |
+
+---
+
+## Instalasi Native (Zero-Friction)
+
+**Windows (PowerShell / CMD):**
+```
+.\run.bat
+```
+
+**Linux / macOS / Raspberry Pi / WSL:**
+```
+./run.sh
+```
+
+Skrip runner native otomatis:
+- Membuat virtual environment `.venv` jika belum ada
+- Memasang `requirements.txt` jika modul belum terpasang
+- Membuat `.env` awal jika belum ada
+- Menjalankan server di port **3487**
+
+---
+
+## Instalasi Docker Compose (Manual)
 
 ```
-# Mode dasar (HTTP, port 8000)
+# Mode dasar (HTTP, port 3487 — siap reverse proxy)
 docker compose up -d
 
-# Mode production + HTTPS otomatis (Let's Encrypt)
+# Mode dengan reverse proxy Caddy bawaan (HTTPS otomatis)
 docker compose --profile proxy up -d
+
+# Mode dengan Cloudflare Tunnel (akses remote tanpa IP publik)
+docker compose --profile tunnel up -d
 ```
 
-variabel konfigurasi (opsional): `SA_HOST`, `SA_PORT`, `SECRET_KEY`,
-`ADMIN_PASSWORD`, `SA_SIMULATE`, `SA_DEVICE_SERIAL`, `DOMAIN`.
+Variabel konfigurasi (opsional): `SA_HOST`, `SA_PORT`, `SECRET_KEY`,
+`ADMIN_PASSWORD`, `SA_SIMULATE`, `SA_DEVICE_SERIAL`, `DOMAIN`, `TUNNEL_TOKEN`.
 
-Untuk panduan lengkap, lihat bagian *Deployment* di bawah.
+Catatan: **File `docker-compose.yml` dasar TIDAK memuat passthrough USB** — berjalan 100% universal di Windows, macOS, Linux, dan Cloud VPS. Untuk hardware fisik SA124B pada host Linux, gunakan:
+```
+docker compose -f docker-compose.yml -f docker-compose.hardware.yml up -d
+```
+Atau lebih mudah: `./deploy.sh --hardware`.
 
 ## Struktur Proyek
 
 ```
-handfish/
-├── auth.py          # Autentikasi JWT HS256, hashing PBKDF2-SHA256, RBAC
-├── security.py      # Rate limiter, sanitasi path, security headers, audit log
-├── config.py        # Konfigurasi & override environment
-├── sa124.py         # Binding C API SA124B atau hardware simulator
-├── engine.py        # CaptureEngine: scan-and-dwell, WebSocket broadcast
-├── channels.py      # 13 preset pita + generator kanal per preset
-├── recorder.py      # Pembuat, pengolah, & penghapus rekaman WAV
-├── occupancy.py     # Akumulator & statistik okupansi kanal (SQLite WAL)
-├── scheduler.py     # Penjadwal kampanye survei okupansi
-├── reports.py       # Ekspor laporan Excel/CSV
-├── server.py        # FastAPI REST API + WebSocket streaming
-├── static/          # Single-page app (HTML/CSS/JS)
-├── tests/           # Uji engine end-to-end & uji keamanan API
-├── data/            # Database SQLite & kunci rahasia (diabaikan git)
-├── recordings/      # Berkas WAV hasil perekaman   (diabaikan git)
-├── reports/         # Berkas ekspor Excel/CSV     (diabaikan git)
-├── logs/            # Audit log & log aplikasi    (diabaikan git)
+prism/
+├── auth.py                  # Autentikasi JWT HS256, hashing PBKDF2-SHA256, RBAC
+├── security.py              # Rate limiter, sanitasi path, security headers, audit log
+├── config.py                # Konfigurasi & override environment
+├── sa124.py                 # Binding C API SA124B atau hardware simulator
+├── engine.py                # CaptureEngine: scan-and-dwell, WebSocket broadcast
+├── channels.py              # 13 preset pita + generator kanal per preset
+├── recorder.py              # Pembuat, pengolah, & penghapus rekaman WAV
+├── occupancy.py             # Akumulator & statistik okupansi kanal (SQLite WAL)
+├── scheduler.py             # Penjadwal kampanye survei okupansi
+├── reports.py               # Ekspor laporan Excel/CSV
+├── server.py                # FastAPI REST API + WebSocket streaming
+├── static/                  # Single-page app (HTML/CSS/JS)
+├── tests/                   # Uji engine end-to-end & uji keamanan API
+├── data/                    # Database SQLite & kunci rahasia (diabaikan git)
+├── recordings/              # Berkas WAV hasil perekaman   (diabaikan git)
+├── reports/                 # Berkas ekspor Excel/CSV     (diabaikan git)
+├── logs/                    # Audit log & log aplikasi    (diabaikan git)
 ├── Dockerfile
-├── docker-compose.yml
-├── Caddyfile
+├── docker-compose.yml       # Compose universal (crash-proof di Windows/macOS/Linux/VPS)
+├── docker-compose.hardware.yml # Ekstensi USB passthrough SA124B untuk host Linux
+├── Caddyfile                # Konfigurasi reverse proxy Caddy HTTPS otomatis
+├── nginx.conf.example       # Contoh konfigurasi reverse proxy Nginx eksternal
+├── deploy.bat               # Skrip deployer 1-klik untuk Windows
+├── deploy.sh                # Skrip deployer 1-klik untuk Linux / macOS
 ├── requirements.txt
 ├── .gitignore
+├── .dockerignore
 ├── .env.example
-├── run.bat
-├── run.sh
+├── run.bat                  # Runner native Windows (auto-venv & auto-requirements)
+├── run.sh                   # Runner native Linux (auto-venv & auto-requirements)
 ├── LICENSE
 └── README.md
 ```
@@ -143,27 +207,84 @@ sweep berkelanjutan sambil merekam setiap kedudukan.
 
 ## Deployment Lengkap (Docker Compose)
 
-### Mode Dasar
+### Mode Dasar (Universal & Crash-Proof)
 
 ```
 docker compose up -d
 ```
+Atau cukup jalankan `deploy.bat` (Windows) / `./deploy.sh` (Linux).
 
-- Container `handfish-app` terbuka di port 8000.
+- Container `prism-app` terbuka di port **3487** (`http://localhost:3487`),
+  siap diakses langsung atau ditaruh di belakang reverse proxy seperti Nginx, Caddy, Traefik, atau Cloudflare Tunnel.
+- Konfigurasi dasar **tidak menyertakan node host `/dev/bus/usb`**, sehingga dijamin
+  dapat berjalan langsung di Windows Docker Desktop (WSL2), macOS, maupun Cloud VPS (AWS/Hetzner/DigitalOcean)
+  tanpa error startup.
 - Volume persisten: `./data` (database & kredensial), `./recordings`, `./reports`,
-  `./logs` — datanya bertahan meskipun container dihapus/dibuat ulang.
-- Passthrough USB (`/dev/bus/usb`) aktif bila host adalah Linux.
+  `./logs` — datanya bertahan meskipun container di-recreate/diupdate.
+- Healthcheck otomatis menyesuaikan port yang dikonfigurasi pada `SA_PORT`.
 
-### Mode Production dengan Caddy Reverse Proxy
+### Passthrough Perangkat Keras SA124B (Host Linux)
 
+Bila Anda menjalankan container di host Linux fisik (Ubuntu/Debian/Raspberry Pi)
+dengan kabel USB SA124B tercolok:
+
+```bash
+# Menggunakan skrip otomasi:
+./deploy.sh --hardware
+
+# Atau perintah compose manual:
+docker compose -f docker-compose.yml -f docker-compose.hardware.yml up -d
 ```
-docker compose --profile proxy up -d
+
+### Akses Remote & Reverse Proxy
+
+#### Pilihan A: Cloudflare Tunnel (Paling Mudah — Tanpa IP Publik / Port Forwarding)
+
+Sangat cocok untuk stasiun pemantau radio di lapangan yang memakai modem seluler
+4G/LTE atau Starlink di balik CGNAT.
+
+1. Buka [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/) → **Networks** → **Tunnels**.
+2. Buat Tunnel baru, tambahkan Public Hostname yang mengarah ke `http://prism:3487`.
+3. Salin token tunnel dan masukkan ke `.env`:
+   ```env
+   TUNNEL_TOKEN=eyJh...
+   ```
+4. Jalankan:
+   ```bash
+   # Windows:
+   deploy.bat --tunnel
+
+   # Linux:
+   ./deploy.sh --tunnel
+   # Atau: docker compose --profile tunnel up -d
+   ```
+Dashboard Anda langsung memiliki HTTPS publik global tanpa perlu membuka port router!
+
+#### Pilihan B: Caddy Bawaan (HTTPS Otomatis Let's Encrypt)
+
+```bash
+# Windows:
+deploy.bat --proxy
+
+# Linux:
+./deploy.sh --proxy
+# Atau: docker compose --profile proxy up -d
 ```
 
-1. Atur `DOMAIN=your.domain.com` di `.env` atau lewat environment.
-2. Jalankan dengan profil `proxy` untuk memulai Caddy.
-3. Caddy menerbitkan sertifikat Let's Encrypt otomatis untuk domain yang Anda
-   setel. Dashboard dapat diakses via `https://your.domain.com`.
+1. Atur `DOMAIN=your.domain.com` di `.env`.
+2. Buka port 80 dan 443 di firewall/router Anda.
+3. Caddy menerbitkan sertifikat Let's Encrypt otomatis. Akses: `https://your.domain.com`.
+
+#### Pilihan C: Nginx Sendiri
+
+Bila Anda sudah memiliki Nginx di server, cukup gunakan file contoh:
+```bash
+sudo cp nginx.conf.example /etc/nginx/conf.d/prism.conf
+# Sesuaikan domain & upstream ke 127.0.0.1:3487
+sudo nginx -t && sudo systemctl reload nginx
+```
+Pastikan `SA_TRUSTED_PROXY=true` di `.env` agar pembatasan laju login dan
+catatan audit mencatat IP klien asli (membaca header `X-Forwarded-For`).
 
 Untuk ekspos ke internet, pastikan Anda sudah:
 
@@ -294,12 +415,19 @@ jika perangkat fisik tidak terdeteksi.
 
 ## Uji Coba
 
-```
+```bash
 # Engine end-to-end (dengan simulator)
 python tests/smoke_engine.py
 
 # Keamanan API (RBAC, rate limiting, path traversal, WebSocket auth)
 python tests/test_security_api.py
+
+# Retune audio tanpa interupsi stream (drag-to-tune)
+python tests/test_retune.py
+
+# Integritas scope & fungsi frontend JavaScript (mencegah ReferenceError)
+python tests/test_js_scope.py
+node tests/test_js_dom.js
 ```
 
 Uji keamanan mencakup lebih dari 100 pemeriksaan: header keamanan, autentikasi,

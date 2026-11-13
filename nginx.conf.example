@@ -1,0 +1,105 @@
+# ======================================================================
+#   PRISM — Konfigurasi Contoh Reverse Proxy Nginx
+# ======================================================================
+#
+# Berkas ini adalah contoh konfigurasi reverse proxy Nginx untuk Prism
+# yang berjalan pada port 3487 (Docker Compose atau native).
+#
+# Fitur yang dikonfigurasi:
+#   - Penerusan stream WebSocket berlatensi rendah (/ws/spectrum, /ws/audio, /ws/events)
+#   - Penerusan header klien asli (X-Real-IP, X-Forwarded-For, X-Forwarded-Proto)
+#     agar pembatasan laju login dan catatan audit Prism mencatat IP asli
+#     (pastikan SA_TRUSTED_PROXY=true diset di Prism).
+#   - Pematian buffering respons agar spektrum dan audio mengalir tanpa jeda.
+#   - Timeout panjang (86400s) agar koneksi streaming tidak diputus Nginx.
+#
+# Pemasangan di server Debian / Ubuntu:
+#   1. Salin berkas ini ke /etc/nginx/conf.d/prism.conf
+#   2. Sesuaikan `server_name` dan path sertifikat SSL bila memakai HTTPS.
+#   3. Uji konfigurasi:  nginx -t
+#   4. Muat ulang Nginx: systemctl reload nginx
+# ======================================================================
+
+# Upstream Prism:
+#   - Bila Nginx berada di host yang sama dengan Docker: gunakan 127.0.0.1:3487
+#   - Bila Nginx berada di container yang sama (network compose): gunakan prism:3487
+upstream prism_backend {
+    server 127.0.0.1:3487;
+    keepalive 32;
+}
+
+# --- Blok HTTP (akses langsung atau pengalihan ke HTTPS) ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name prism.example.com;   # Ganti dengan domain atau IP Anda
+
+    # Batas ukuran payload upload (laporan / pengaturan)
+    client_max_body_size 64M;
+
+    # Berkas log
+    access_log /var/log/nginx/prism_access.log;
+    error_log  /var/log/nginx/prism_error.log warn;
+
+    location / {
+        proxy_pass http://prism_backend;
+        proxy_http_version 1.1;
+
+        # --------------------------------------------------------------
+        # Header proxy standar — WAJIB untuk SA_TRUSTED_PROXY
+        # --------------------------------------------------------------
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Port  $server_port;
+
+        # --------------------------------------------------------------
+        # Penanganan WebSocket Prism (/ws/spectrum, /ws/audio, /ws/events)
+        # --------------------------------------------------------------
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        # Matikan buffering agar stream audio float32 dan spektrum FFT
+        # langsung terkirim seketika (realtime) tanpa ditahan Nginx.
+        proxy_buffering off;
+        proxy_request_buffering off;
+
+        # Timeout panjang untuk koneksi WebSocket pemantauan spektrum 24/7
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 60s;
+    }
+}
+
+# Pemetaan header Connection untuk WebSocket (letakkan di luar blok server bila di nginx.conf utama)
+# map $http_upgrade $connection_upgrade {
+#     default upgrade;
+#     ''      close;
+# }
+
+# --- Opsional: Blok HTTPS dengan Certbot / Let's Encrypt ---
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name prism.example.com;
+#
+#     ssl_certificate     /etc/letsencrypt/live/prism.example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/prism.example.com/privkey.pem;
+#     ssl_protocols       TLSv1.2 TLSv1.3;
+#     ssl_ciphers         HIGH:!aNULL:!MD5;
+#
+#     location / {
+#         proxy_pass http://prism_backend;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host              $host;
+#         proxy_set_header X-Real-IP         $remote_addr;
+#         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto https;
+#         proxy_set_header Upgrade           $http_upgrade;
+#         proxy_set_header Connection        "upgrade";
+#         proxy_buffering off;
+#         proxy_read_timeout 86400s;
+#     }
+# }

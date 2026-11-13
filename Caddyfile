@@ -1,11 +1,12 @@
-# Konfigurasi Caddy untuk Handfish Reverse Proxy
+# Konfigurasi Caddy untuk Prism Reverse Proxy
 # Menangani HTTPS otomatis, kompresi, dan upgrade koneksi WebSocket.
 
 {$DOMAIN:localhost} {
     encode zstd gzip
 
-    # Proxy ke aplikasi FastAPI Handfish
-    reverse_proxy handfish:8000 {
+    # Proxy ke aplikasi FastAPI Prism
+    # Port di sini harus sama dengan SA_PORT listen container (lihat Dockerfile).
+    reverse_proxy prism:3487 {
         # Header proxy standar
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}

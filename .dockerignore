@@ -1,0 +1,74 @@
+# ----------------------------------------------------------------------
+# .dockerignore — persempit build context (image lebih kecil & cache stabil).
+# Sesuai denomen: file yang ter-petakan sebagai volume, atau hanya artefak
+# pengembangan, tidak boleh masuk ke dalam image.
+# ----------------------------------------------------------------------
+
+# Version control, IDE, asisten
+.git
+.gitignore
+.claude
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Cache tes & lint
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data — sudah dipetakan sebagai volume di compose, JANGAN di-bake
+data/
+recordings/
+reports/
+logs/
+*.log
+
+# Kunci rahasia (secret.key, kunci audit) — tak boleh bocor ke image
+*.key
+.env
+.env.*
+!.env.example
+
+# Artefak verifikasi & tes otomatis
+.shots/
+.playwright-mcp/
+playwright-report/
+node_modules/
+.nyc_output/
+
+# Berkas Deployment & dokumentasi — tidak dipakai saat runtime
+Dockerfile
+docker-compose.yml
+.dockerignore
+Caddyfile
+nginx.conf.example
+run.bat
+run.sh
+*.md
+!.dockerignore
+
+# Tes hanya untuk CI/development host
+tests/

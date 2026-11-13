@@ -1,0 +1,18 @@
+# ======================================================================
+#   PRISM — Docker Compose Hardware Passthrough Extension
+#
+#   Gunakan file ini HANYA pada host Linux fisik yang terhubung langsung
+#   dengan perangkat Signal Hound SA124B melalui USB.
+#
+#   Cara menjalankan:
+#     docker compose -f docker-compose.yml -f docker-compose.hardware.yml up -d
+#     atau lebih mudah via skrip:
+#     ./deploy.sh --hardware
+# ======================================================================
+
+services:
+  prism:
+    devices:
+      - "/dev/bus/usb:/dev/bus/usb"
+    group_add:
+      - "${USB_GID:-189}"     # 189 pada Debian/Ubuntu modern; cek via: stat -c '%g' /dev/bus/usb/*/001

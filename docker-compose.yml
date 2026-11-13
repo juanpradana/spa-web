@@ -1,5 +1,5 @@
 # ======================================================================
-#   HANDFISH — Signal Hound SA124B Dashboard
+#   PRISM — Signal Hound SA124B Dashboard
 #   Deployment multi-platform dengan Docker Compose
 #
 #   Mode dasar:      docker compose up -d
@@ -7,20 +7,26 @@
 # ======================================================================
 
 services:
-  handfish:
+  prism:
     build:
       context: .
       dockerfile: Dockerfile
-    image: handfish:latest
-    container_name: handfish-app
+    image: prism:latest
+    container_name: prism-app
     restart: unless-stopped
 
     ports:
-      - "${SA_PORT:-8000}:8000"
+      # Port host = SA_PORT (default 3487) → port container = SA_PORT.
+      # Dipakai agar mudah ditaruh di belakang reverse proxy (Caddy/nginx):
+      # proxy meneruskan ke prism:3487, host mengekspos 3487.
+      - "${SA_PORT:-3487}:${SA_PORT:-3487}"
 
     environment:
       SA_HOST: "0.0.0.0"
-      SA_PORT: "8000"
+      # Port listen di dalam container. SAMA dengan bagian kanan pemetaan di
+      # atas, jadi satu nilai SA_PORT mengatur host maupun container — tidak
+      # ada drift "port sudah dipakai" bila operator mengganti port di .env.
+      SA_PORT: "${SA_PORT:-3487}"
       SA_SIMULATE: "${SA_SIMULATE:-false}"
       SA_DEVICE_SERIAL: "${SA_DEVICE_SERIAL:-}"
       SA_ENABLE_DOCS: "${SA_ENABLE_DOCS:-false}"
@@ -32,6 +38,11 @@ services:
       SA_TOKEN_TTL_MINUTES: "${SA_TOKEN_TTL_MINUTES:-720}"
       SA_LOGIN_RATE_LIMIT: "${SA_LOGIN_RATE_LIMIT:-5}"
       SA_LOGIN_RATE_WINDOW_SEC: "${SA_LOGIN_RATE_WINDOW_SEC:-60}"
+
+      # Honori header X-Forwarded-For dari reverse proxy. Wajib true saat
+      # diakses lewat Caddy/nginx/Cloudflare agar pencatatan audit dan
+      # pembatasan laju login mencatat IP klien asli, bukan IP proxy.
+      SA_TRUSTED_PROXY: "${SA_TRUSTED_PROXY:-true}"
 
       # Ambang batas okupansi & perekaman
       SA_THRESHOLD_MODE: "${SA_THRESHOLD_MODE:-adaptive}"
@@ -48,23 +59,9 @@ services:
       - ./reports:/app/reports
       - ./logs:/app/logs
 
-    # ------------------------------------------------------------------
-    # Passthrough perangkat keras USB Signal Hound SA124B
-    #
-    # Berfungsi pada host Linux (termasuk Raspberry Pi / NUC lapangan).
-    # Pada Docker Desktop (Windows/macOS) blok `devices` diabaikan — jalankan
-    # aplikasi secara native lewat run.bat, atau ekspos USB via usbipd-win.
-    # ------------------------------------------------------------------
-    devices:
-      - "/dev/bus/usb:/dev/bus/usb"
-
-    # Beri hak akses node USB tanpa menjalankan container sebagai root.
-    # Sesuaikan GID dengan host:  ls -l /dev/bus/usb/001/  →  stat -c '%g' /dev/bus/usb/001/001
-    # group_add:
-    #   - "${USB_GID:-20}"     # dialout pada Debian/Ubuntu
-
+    # Healthcheck dinamis: membaca port langsung dari SA_PORT container.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:$${SA_PORT:-3487}/ || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -73,14 +70,21 @@ services:
     security_opt:
       - no-new-privileges:true
 
+    # Tingkatkan batas file descriptor untuk ribuan stream WebSocket spektrum & audio
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
   # --------------------------------------------------------------------
   # Reverse Proxy Caddy (opsional, profil `proxy`)
   # HTTPS otomatis via Let's Encrypt, kompresi zstd/gzip, WebSocket
-  # transparan. Diperlukan saat dashboard diekspos ke internet.
+  # transparan. Diperlukan saat dashboard diekspos ke internet publik.
+  # Jalankan: docker compose --profile proxy up -d
   # --------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
-    container_name: handfish-caddy
+    container_name: prism-caddy
     restart: unless-stopped
     profiles: ["proxy"]
     ports:
@@ -94,7 +98,26 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      handfish:
+      prism:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------
+  # Cloudflare Tunnel (opsional, profil `tunnel`)
+  # Solusi termudah untuk stasiun pemantau radio di lapangan yang memakai
+  # modem seluler 4G/LTE atau Starlink di balik CGNAT (tanpa IP publik).
+  # Cukup isi TUNNEL_TOKEN di .env lalu jalankan:
+  #   ./deploy.sh --tunnel  atau  docker compose --profile tunnel up -d
+  # --------------------------------------------------------------------
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: prism-tunnel
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"
+    depends_on:
+      prism:
         condition: service_healthy
 
 volumes:
